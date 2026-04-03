@@ -1,15 +1,17 @@
-# Paper2Slides for Obsidian
+# Paper2Slides for Obsidian (WIP)
 
 An Obsidian desktop plugin that lets you run [Paper2Slides](https://github.com/HKUDS/Paper2Slides) against a PDF or Markdown note and pull the newest outputs back into your vault.
 
-This is a thin integration layer, not a reimplementation. The actual paper-to-slides pipeline comes from the original `HKUDS/Paper2Slides` project.
+This is still work in progress. It is already useful for testing, but not something I would call polished yet.
+
+This is a thin integration layer, not a reimplementation. All of the actual paper-to-slides work is done by the original `HKUDS/Paper2Slides` project.
 
 ## Credit
 
 Huge credit to the original Paper2Slides authors and maintainers.
 
 - Original project: [HKUDS/Paper2Slides](https://github.com/HKUDS/Paper2Slides)
-- This repo focuses on the Obsidian-side glue so the workflow feels natural inside a vault
+- This plugin exists to make that workflow feel less clunky inside Obsidian
 
 ## What it does right now
 
@@ -30,8 +32,14 @@ Huge credit to the original Paper2Slides authors and maintainers.
    - `Python command`: usually `python3`
    - `Paper2Slides repo path`: absolute path to your local Paper2Slides checkout
 
-## Notes
+## Dev notes
 
 - No hardcoded personal Python path
-- Desktop-only, because it shells out to a local Python process
-- The import step assumes the upstream Paper2Slides output layout stays broadly stable
+- No assumption that your vault sits inside the Paper2Slides repo
+- If your Python lives in a venv, you can still point the plugin directly at it
+
+## Current rough edges
+
+- This is desktop-only because it shells out to a local Python process
+- The plugin assumes the upstream Paper2Slides output layout stays stable
+- Community-plugin release plumbing is started here, but publishing still means packaging releases and testing on a clean vault

@@ -1,7 +1,7 @@
 {
   "name": "paper2slides-obsidian",
   "version": "1.0.0",
-  "description": "Run Paper2Slides from Obsidian and pull the latest slides, poster, and summary back into your vault.",
+  "description": "WIP plugin to run Paper2Slides from Obsidian and pull results back into your vault.",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
