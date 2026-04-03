@@ -6,7 +6,31 @@ This is still work in progress. It is already useful for testing, but not someth
 
 This is a thin integration layer, not a reimplementation. All of the actual paper-to-slides work is done by the original `HKUDS/Paper2Slides` project.
 
+The plugin does not render slides on its own. It just connects Obsidian to a local `Paper2Slides` checkout and runs the upstream CLI for you.
+
 ![Paper2Slides Obsidian pipeline](assets/pipeline-diagram.svg)
+
+## Use it in 30 seconds
+
+1. Install and configure the original `Paper2Slides` repo so the CLI works on your machine
+2. In Obsidian, open this plugin's settings
+3. Set `Python command` to something that works on your machine, usually `python3`
+4. Set `Paper2Slides repo path` to your local `Paper2Slides` checkout
+5. Right-click a PDF or Markdown file in the vault
+6. Click `Generate Slides/Poster (Paper2Slides)`
+7. Wait for the run to finish and check `Paper2Slides/<source-file-name>/` in your vault
+
+If the Python environment, dependencies, or API keys are broken in the original `Paper2Slides` repo, this plugin will not generate anything either.
+
+## What actually happens
+
+- The plugin takes the file you clicked in Obsidian
+- It starts the local `Paper2Slides` CLI with that file as input
+- `Paper2Slides` does the real work: parse, summarize, plan, generate
+- The plugin imports the newest output files back into your vault
+
+Example:
+Right-click `paper.pdf` or `notes.md` in Obsidian, run `Generate Slides/Poster (Paper2Slides)`, then open `Paper2Slides/paper/` or `Paper2Slides/notes/` in the vault to inspect the imported results
 
 ## Credit
 
