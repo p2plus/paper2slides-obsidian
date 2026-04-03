@@ -8,6 +8,9 @@ type StylePreset = 'academic' | 'doraemon' | 'custom';
 type ContentType = 'paper' | 'general';
 type SlidesLength = 'short' | 'medium' | 'long';
 type PosterDensity = 'sparse' | 'medium' | 'dense';
+type ApiProvider = 'repo_defaults' | 'z_ai' | 'lm_studio' | 'ollama' | 'anythingllm';
+type ZAiEntrypoint = 'international_coding_plan';
+type ZAiModelPreset = 'glm-5.1' | 'custom';
 
 interface Paper2SlidesSettings {
 	pythonPath: string;
@@ -21,6 +24,15 @@ interface Paper2SlidesSettings {
 	parallelWorkers: number;
 	importRoot: string;
 	saveRunLog: boolean;
+	apiProvider: ApiProvider;
+	zAiEntrypoint: ZAiEntrypoint;
+	zAiApiKey: string;
+	zAiModelPreset: ZAiModelPreset;
+	zAiCustomModel: string;
+	localProviderBaseUrl: string;
+	localProviderApiKey: string;
+	localProviderModel: string;
+	anythingllmBaseUrl: string;
 }
 
 interface RunContext {
@@ -49,9 +61,21 @@ const DEFAULT_SETTINGS: Paper2SlidesSettings = {
 	parallelWorkers: 1,
 	importRoot: 'Paper2Slides',
 	saveRunLog: true,
+	apiProvider: 'repo_defaults',
+	zAiEntrypoint: 'international_coding_plan',
+	zAiApiKey: '',
+	zAiModelPreset: 'glm-5.1',
+	zAiCustomModel: '',
+	localProviderBaseUrl: 'http://127.0.0.1:1234/v1',
+	localProviderApiKey: '',
+	localProviderModel: '',
+	anythingllmBaseUrl: 'http://localhost:3001/api/v1',
 };
 
 const TIMESTAMP_DIR_PATTERN = /^\d{8}_\d{6}$/;
+const Z_AI_CODING_PLAN_URL = 'https://api.z.ai/api/coding/paas/v4/';
+const LM_STUDIO_BASE_URL = 'http://127.0.0.1:1234/v1';
+const OLLAMA_BASE_URL = 'http://localhost:11434/v1';
 
 export default class Paper2SlidesPlugin extends Plugin {
 	settings: Paper2SlidesSettings;
@@ -179,6 +203,50 @@ export default class Paper2SlidesPlugin extends Plugin {
 		}
 	}
 
+	private getResolvedModel(): string {
+		if (this.settings.apiProvider === 'z_ai') {
+			if (this.settings.zAiModelPreset === 'custom') {
+				return this.settings.zAiCustomModel.trim() || 'glm-5.1';
+			}
+			return this.settings.zAiModelPreset;
+		}
+
+		if (this.settings.apiProvider === 'lm_studio' || this.settings.apiProvider === 'ollama' || this.settings.apiProvider === 'anythingllm') {
+			return this.settings.localProviderModel.trim();
+		}
+
+		return '';
+	}
+
+	private getResolvedBaseUrl(): string {
+		switch (this.settings.apiProvider) {
+			case 'z_ai':
+				return Z_AI_CODING_PLAN_URL;
+			case 'lm_studio':
+				return this.settings.localProviderBaseUrl.trim() || LM_STUDIO_BASE_URL;
+			case 'ollama':
+				return this.settings.localProviderBaseUrl.trim() || OLLAMA_BASE_URL;
+			case 'anythingllm':
+				return this.settings.anythingllmBaseUrl.trim();
+			default:
+				return '';
+		}
+	}
+
+	private getRunEnv(): NodeJS.ProcessEnv {
+		const env: NodeJS.ProcessEnv = { ...process.env };
+		if (this.settings.apiProvider === 'z_ai') {
+			env.RAG_LLM_BASE_URL = Z_AI_CODING_PLAN_URL;
+			env.RAG_LLM_API_KEY = this.settings.zAiApiKey.trim();
+			env.LLM_MODEL = this.getResolvedModel();
+		} else if (this.settings.apiProvider === 'lm_studio' || this.settings.apiProvider === 'ollama' || this.settings.apiProvider === 'anythingllm') {
+			env.RAG_LLM_BASE_URL = this.getResolvedBaseUrl();
+			env.RAG_LLM_API_KEY = this.settings.localProviderApiKey.trim() || `${this.settings.apiProvider}-local`;
+			env.LLM_MODEL = this.getResolvedModel();
+		}
+		return env;
+	}
+
 	private async ensureVaultFolder(folderPath: string): Promise<void> {
 		if (folderPath === '.' || folderPath === '' || await this.app.vault.adapter.exists(folderPath)) {
 			return;
@@ -210,11 +278,40 @@ export default class Paper2SlidesPlugin extends Plugin {
 		}
 
 		const envPath = repoPath ? path.join(repoPath, 'paper2slides', '.env') : '';
+		const usesPluginProvider = this.settings.apiProvider !== 'repo_defaults';
 		if (envPath && fs.existsSync(envPath)) {
 			lines.push('Found paper2slides/.env.');
+		} else if (usesPluginProvider) {
+			lines.push('paper2slides/.env is missing, but the plugin will inject provider settings at runtime.');
 		} else {
 			ok = false;
 			lines.push('Missing paper2slides/.env.');
+		}
+
+		if (this.settings.apiProvider === 'z_ai') {
+			if (!this.settings.zAiApiKey.trim()) {
+				ok = false;
+				lines.push('Missing Z.AI API key.');
+			} else {
+				lines.push('Z.AI API key is set in plugin settings.');
+			}
+			lines.push(`Z.AI entrypoint: ${Z_AI_CODING_PLAN_URL}`);
+			lines.push(`Z.AI model: ${this.getResolvedModel()}`);
+		} else if (this.settings.apiProvider === 'lm_studio' || this.settings.apiProvider === 'ollama' || this.settings.apiProvider === 'anythingllm') {
+			const baseUrl = this.getResolvedBaseUrl();
+			if (!baseUrl) {
+				ok = false;
+				lines.push('Missing local provider base URL.');
+			} else {
+				lines.push(`Local provider endpoint: ${baseUrl}`);
+			}
+
+			if (!this.getResolvedModel()) {
+				ok = false;
+				lines.push('Missing local provider model id.');
+			} else {
+				lines.push(`Local provider model: ${this.getResolvedModel()}`);
+			}
 		}
 
 		if (repoPath) {
@@ -245,7 +342,7 @@ export default class Paper2SlidesPlugin extends Plugin {
 
 	private async runCommand(command: string, args: string[], cwd: string): Promise<{ ok: boolean; output: string }> {
 		return await new Promise((resolve) => {
-			const child = spawn(command, args, { cwd, env: { ...process.env } });
+			const child = spawn(command, args, { cwd, env: this.getRunEnv() });
 			let output = '';
 
 			child.stdout.on('data', (data) => {
@@ -325,7 +422,7 @@ export default class Paper2SlidesPlugin extends Plugin {
 
 		const processHandle = spawn(this.settings.pythonPath, args, {
 			cwd: repoPath,
-			env: { ...process.env },
+			env: this.getRunEnv(),
 		});
 
 		const run: RunContext = {
@@ -628,6 +725,149 @@ class Paper2SlidesSettingTab extends PluginSettingTab {
 					this.plugin.settings.importRoot = value.trim() || 'Paper2Slides';
 					await this.plugin.saveSettings();
 				}));
+
+		containerEl.createEl('h3', { text: 'API' });
+
+		new Setting(containerEl)
+			.setName('API provider')
+			.setDesc('Use the repo defaults, or override the LLM settings with Z.AI from inside Obsidian.')
+			.addDropdown((dropdown) => dropdown
+				.addOption('repo_defaults', 'Use repo defaults')
+				.addOption('z_ai', 'Z AI')
+				.addOption('lm_studio', 'LM Studio')
+				.addOption('ollama', 'Ollama')
+				.addOption('anythingllm', 'AnythingLLM')
+				.setValue(this.plugin.settings.apiProvider)
+				.onChange(async (value: ApiProvider) => {
+					this.plugin.settings.apiProvider = value;
+					if (value === 'lm_studio' && !this.plugin.settings.localProviderBaseUrl.trim()) {
+						this.plugin.settings.localProviderBaseUrl = LM_STUDIO_BASE_URL;
+					}
+					if (value === 'ollama' && !this.plugin.settings.localProviderBaseUrl.trim()) {
+						this.plugin.settings.localProviderBaseUrl = OLLAMA_BASE_URL;
+					}
+					await this.plugin.saveSettings();
+					this.display();
+				}));
+
+		if (this.plugin.settings.apiProvider === 'z_ai') {
+			new Setting(containerEl)
+				.setName('Z AI entrypoint')
+				.setDesc('Currently wired to the International Coding Plan endpoint.')
+				.addDropdown((dropdown) => dropdown
+					.addOption('international_coding_plan', 'International Coding Plan')
+					.setValue(this.plugin.settings.zAiEntrypoint)
+					.onChange(async (value: ZAiEntrypoint) => {
+						this.plugin.settings.zAiEntrypoint = value;
+						await this.plugin.saveSettings();
+					}));
+
+			new Setting(containerEl)
+				.setName('Z AI API key')
+				.setDesc('Stored in the plugin settings and injected at runtime as RAG_LLM_API_KEY.')
+				.addText((text) => text
+					.setPlaceholder('zai-...')
+					.setValue(this.plugin.settings.zAiApiKey)
+					.onChange(async (value) => {
+						this.plugin.settings.zAiApiKey = value.trim();
+						await this.plugin.saveSettings();
+					}));
+
+			new Setting(containerEl)
+				.setName('Model')
+				.setDesc('Pick glm-5.1, or switch to custom and enter another Z.AI model id.')
+				.addDropdown((dropdown) => dropdown
+					.addOption('glm-5.1', 'glm-5.1')
+					.addOption('custom', 'Custom')
+					.setValue(this.plugin.settings.zAiModelPreset)
+					.onChange(async (value: ZAiModelPreset) => {
+						this.plugin.settings.zAiModelPreset = value;
+						await this.plugin.saveSettings();
+						this.display();
+					}));
+
+			if (this.plugin.settings.zAiModelPreset === 'custom') {
+				new Setting(containerEl)
+					.setName('Custom model id')
+					.setDesc('Use this for any other model from the Z.AI list.')
+					.addText((text) => text
+						.setPlaceholder('glm-5.1')
+						.setValue(this.plugin.settings.zAiCustomModel)
+						.onChange(async (value) => {
+							this.plugin.settings.zAiCustomModel = value.trim();
+							await this.plugin.saveSettings();
+						}));
+			}
+		} else if (this.plugin.settings.apiProvider === 'lm_studio' || this.plugin.settings.apiProvider === 'ollama') {
+			const providerName = this.plugin.settings.apiProvider === 'lm_studio' ? 'LM Studio' : 'Ollama';
+			const defaultBaseUrl = this.plugin.settings.apiProvider === 'lm_studio' ? LM_STUDIO_BASE_URL : OLLAMA_BASE_URL;
+
+			new Setting(containerEl)
+				.setName(`${providerName} base URL`)
+				.setDesc('OpenAI-compatible endpoint used for the Paper2Slides run.')
+				.addText((text) => text
+					.setPlaceholder(defaultBaseUrl)
+					.setValue(this.plugin.settings.localProviderBaseUrl)
+					.onChange(async (value) => {
+						this.plugin.settings.localProviderBaseUrl = value.trim() || defaultBaseUrl;
+						await this.plugin.saveSettings();
+					}));
+
+			new Setting(containerEl)
+				.setName(`${providerName} model`)
+				.setDesc('Model id exposed by your local server.')
+				.addText((text) => text
+					.setPlaceholder(this.plugin.settings.apiProvider === 'ollama' ? 'llama3.1:8b' : 'your-loaded-model')
+					.setValue(this.plugin.settings.localProviderModel)
+					.onChange(async (value) => {
+						this.plugin.settings.localProviderModel = value.trim();
+						await this.plugin.saveSettings();
+					}));
+
+			new Setting(containerEl)
+				.setName(`${providerName} API key`)
+				.setDesc('Optional. If blank, the plugin injects a harmless local placeholder token.')
+				.addText((text) => text
+					.setPlaceholder('optional')
+					.setValue(this.plugin.settings.localProviderApiKey)
+					.onChange(async (value) => {
+						this.plugin.settings.localProviderApiKey = value.trim();
+						await this.plugin.saveSettings();
+					}));
+		} else if (this.plugin.settings.apiProvider === 'anythingllm') {
+			new Setting(containerEl)
+				.setName('AnythingLLM base URL')
+				.setDesc('Use the OpenAI-compatible endpoint exposed by your local AnythingLLM setup.')
+				.addText((text) => text
+					.setPlaceholder('http://localhost:3001/api/v1')
+					.setValue(this.plugin.settings.anythingllmBaseUrl)
+					.onChange(async (value) => {
+						this.plugin.settings.anythingllmBaseUrl = value.trim();
+						await this.plugin.saveSettings();
+					}));
+
+			new Setting(containerEl)
+				.setName('AnythingLLM model')
+				.setDesc('Model id served through your local AnythingLLM endpoint.')
+				.addText((text) => text
+					.setPlaceholder('your-model-id')
+					.setValue(this.plugin.settings.localProviderModel)
+					.onChange(async (value) => {
+						this.plugin.settings.localProviderModel = value.trim();
+						await this.plugin.saveSettings();
+					}));
+
+			new Setting(containerEl)
+				.setName('AnythingLLM API key')
+				.setDesc('Optional here, but fill it in if your AnythingLLM API access requires one.')
+				.addText((text) => text
+					.setPlaceholder('optional')
+					.setValue(this.plugin.settings.localProviderApiKey)
+					.onChange(async (value) => {
+						this.plugin.settings.localProviderApiKey = value.trim();
+						await this.plugin.saveSettings();
+					}));
+		}
 
 		containerEl.createEl('h3', { text: 'Generation' });
 

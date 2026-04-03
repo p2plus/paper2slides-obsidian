@@ -13,6 +13,7 @@ This plugin does not generate slides on its own. It connects Obsidian to a local
 - Right-click menu on PDFs and Markdown notes
 - Command palette actions for generate, re-import, setup check, and stop
 - Real generation options instead of hardcoded defaults
+- Provider overrides for Z.AI, LM Studio, Ollama, and AnythingLLM
 - Run logs saved into the imported output folder
 
 ## Use it in a minute
@@ -24,6 +25,7 @@ This plugin does not generate slides on its own. It connects Obsidian to a local
 5. Set:
    - `Python command`, usually `python3`
    - `Paper2Slides repo path`, pointing to your local checkout
+   - `API provider`, if you want to override the repo defaults
    - any generation defaults you want
 6. Trigger it from one of these places:
    - the ribbon button
@@ -44,7 +46,7 @@ If the upstream `Paper2Slides` setup is broken, this plugin will not generate an
 ## In-app controls
 
 - Settings tab:
-  Python path, repo path, output type, slides length, poster density, style, custom style prompt, fast mode, parallel workers, import root, save run log
+  Python path, repo path, API provider, provider-specific endpoint and model settings, output type, slides length, poster density, style, custom style prompt, fast mode, parallel workers, import root, save run log
 - Ribbon button:
   generate for the active PDF or Markdown note
 - Right-click menu:
@@ -62,6 +64,19 @@ If the upstream `Paper2Slides` setup is broken, this plugin will not generate an
 6. Copy `manifest.json`, `main.js`, and `versions.json` into `.obsidian/plugins/paper2slides-obsidian/`
 7. Enable the plugin in Obsidian
 8. Run `Check Paper2Slides setup` once before the first real job
+
+## Provider overrides
+
+If you do not want to rely on the upstream repo defaults, you can override the LLM endpoint directly in the plugin:
+
+- `Z AI`
+  uses the International Coding Plan endpoint and lets you set the API key plus a model such as `glm-5.1`
+- `LM Studio`
+  uses a local OpenAI-compatible endpoint, defaulting to `http://127.0.0.1:1234/v1`
+- `Ollama`
+  uses a local OpenAI-compatible endpoint, defaulting to `http://localhost:11434/v1`
+- `AnythingLLM`
+  lets you point Paper2Slides at your local AnythingLLM endpoint and model setup
 
 ## Credit
 
