@@ -1,61 +1,55 @@
-<svg width="1280" height="720" viewBox="0 0 1280 720" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <rect width="1280" height="720" rx="28" fill="#F6F1E8"/>
-  <rect x="40" y="40" width="1200" height="640" rx="24" fill="#FFFDF8" stroke="#D8CCB8" stroke-width="2"/>
+<svg width="1080" height="1080" viewBox="0 0 1080 1080" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="1080" height="1080" fill="#F7F2EA"/>
+  <rect x="44" y="44" width="992" height="992" rx="28" fill="#FFFDF9" stroke="#D8CDBE" stroke-width="2"/>
 
-  <text x="88" y="118" fill="#2E2A26" font-family="Avenir, Inter, sans-serif" font-size="40" font-weight="700">Paper2Slides Obsidian Flow</text>
-  <text x="88" y="156" fill="#6E6254" font-family="Avenir, Inter, sans-serif" font-size="22">Was im Plugin tatsächlich passiert, wenn du aus einer PDF oder Markdown-Datei Slides erzeugst.</text>
+  <text x="88" y="118" fill="#27231F" font-family="Inter, Avenir, sans-serif" font-size="40" font-weight="700">Paper2Slides Obsidian Flow</text>
+  <text x="88" y="154" fill="#6A6057" font-family="Inter, Avenir, sans-serif" font-size="22">Obsidian triggers the local CLI. Paper2Slides handles the real generation work.</text>
 
-  <rect x="88" y="212" width="208" height="118" rx="22" fill="#FFF3D9" stroke="#D9B46B" stroke-width="2"/>
-  <text x="114" y="257" fill="#5A4722" font-family="Avenir, Inter, sans-serif" font-size="24" font-weight="700">1. Obsidian file</text>
-  <text x="114" y="292" fill="#7A6540" font-family="Avenir, Inter, sans-serif" font-size="20">PDF = paper mode</text>
-  <text x="114" y="320" fill="#7A6540" font-family="Avenir, Inter, sans-serif" font-size="20">MD = general mode</text>
+  <rect x="88" y="212" width="904" height="120" rx="24" fill="#FFF1D6" stroke="#D7B26B" stroke-width="2"/>
+  <text x="120" y="256" fill="#5B4721" font-family="Inter, Avenir, sans-serif" font-size="26" font-weight="700">1. Pick a source file in the vault</text>
+  <text x="120" y="292" fill="#7B6540" font-family="Inter, Avenir, sans-serif" font-size="20">PDF files run in paper mode. Markdown notes run in general mode.</text>
 
-  <rect x="346" y="212" width="220" height="118" rx="22" fill="#E8F4EC" stroke="#7FB08A" stroke-width="2"/>
-  <text x="372" y="257" fill="#224731" font-family="Avenir, Inter, sans-serif" font-size="24" font-weight="700">2. Plugin shell-out</text>
-  <text x="372" y="292" fill="#476555" font-family="Avenir, Inter, sans-serif" font-size="20">Runs</text>
-  <text x="372" y="320" fill="#476555" font-family="IBM Plex Mono, Menlo, monospace" font-size="20">python3 -m paper2slides</text>
+  <line x1="540" y1="348" x2="540" y2="388" stroke="#8C7E6D" stroke-width="6" stroke-linecap="round"/>
+  <path d="M528 376L540 392L552 376" stroke="#8C7E6D" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
 
-  <rect x="620" y="190" width="538" height="336" rx="28" fill="#EEF3FF" stroke="#9DB2E6" stroke-width="2"/>
-  <text x="652" y="236" fill="#243B6B" font-family="Avenir, Inter, sans-serif" font-size="28" font-weight="700">3. Paper2Slides pipeline</text>
+  <rect x="88" y="412" width="904" height="132" rx="24" fill="#E8F4EC" stroke="#83AF8E" stroke-width="2"/>
+  <text x="120" y="458" fill="#234632" font-family="Inter, Avenir, sans-serif" font-size="26" font-weight="700">2. The plugin starts the local CLI</text>
+  <text x="120" y="494" fill="#496757" font-family="Inter, Avenir, sans-serif" font-size="20">It does not render slides itself. It just runs your local checkout with</text>
+  <text x="120" y="524" fill="#496757" font-family="IBM Plex Mono, Menlo, monospace" font-size="20">python3 -m paper2slides</text>
 
-  <rect x="652" y="272" width="215" height="86" rx="18" fill="#FFFFFF" stroke="#B9C8ED" stroke-width="2"/>
-  <text x="680" y="307" fill="#2D4679" font-family="Avenir, Inter, sans-serif" font-size="24" font-weight="700">RAG</text>
-  <text x="680" y="337" fill="#5D6F95" font-family="Avenir, Inter, sans-serif" font-size="18">parse, index, retrieve</text>
+  <line x1="540" y1="560" x2="540" y2="600" stroke="#8C7E6D" stroke-width="6" stroke-linecap="round"/>
+  <path d="M528 588L540 604L552 588" stroke="#8C7E6D" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
 
-  <rect x="903" y="272" width="223" height="86" rx="18" fill="#FFFFFF" stroke="#B9C8ED" stroke-width="2"/>
-  <text x="931" y="307" fill="#2D4679" font-family="Avenir, Inter, sans-serif" font-size="24" font-weight="700">Summary</text>
-  <text x="931" y="337" fill="#5D6F95" font-family="Avenir, Inter, sans-serif" font-size="18">structure + key content</text>
+  <rect x="88" y="624" width="904" height="228" rx="24" fill="#EEF3FF" stroke="#9DB2E6" stroke-width="2"/>
+  <text x="120" y="670" fill="#243B6B" font-family="Inter, Avenir, sans-serif" font-size="28" font-weight="700">3. Paper2Slides runs the upstream pipeline</text>
 
-  <rect x="652" y="388" width="215" height="86" rx="18" fill="#FFFFFF" stroke="#B9C8ED" stroke-width="2"/>
-  <text x="680" y="423" fill="#2D4679" font-family="Avenir, Inter, sans-serif" font-size="24" font-weight="700">Plan</text>
-  <text x="680" y="453" fill="#5D6F95" font-family="Avenir, Inter, sans-serif" font-size="18">layout + narrative arc</text>
+  <rect x="120" y="714" width="180" height="92" rx="18" fill="#FFFFFF" stroke="#BDCBED" stroke-width="2"/>
+  <text x="146" y="752" fill="#2C4678" font-family="Inter, Avenir, sans-serif" font-size="24" font-weight="700">RAG</text>
+  <text x="146" y="780" fill="#5E7196" font-family="Inter, Avenir, sans-serif" font-size="18">parse + retrieve</text>
 
-  <rect x="903" y="388" width="223" height="86" rx="18" fill="#FFFFFF" stroke="#B9C8ED" stroke-width="2"/>
-  <text x="931" y="423" fill="#2D4679" font-family="Avenir, Inter, sans-serif" font-size="24" font-weight="700">Generate</text>
-  <text x="931" y="453" fill="#5D6F95" font-family="Avenir, Inter, sans-serif" font-size="18">slides, poster, assets</text>
+  <rect x="338" y="714" width="180" height="92" rx="18" fill="#FFFFFF" stroke="#BDCBED" stroke-width="2"/>
+  <text x="364" y="752" fill="#2C4678" font-family="Inter, Avenir, sans-serif" font-size="24" font-weight="700">Summary</text>
+  <text x="364" y="780" fill="#5E7196" font-family="Inter, Avenir, sans-serif" font-size="18">extract structure</text>
 
-  <rect x="88" y="404" width="478" height="122" rx="22" fill="#F4EAFE" stroke="#B89DDD" stroke-width="2"/>
-  <text x="116" y="448" fill="#4B2E72" font-family="Avenir, Inter, sans-serif" font-size="24" font-weight="700">4. Import back into the vault</text>
-  <text x="116" y="484" fill="#6F5893" font-family="Avenir, Inter, sans-serif" font-size="20">The plugin grabs the newest outputs and drops them into</text>
-  <text x="116" y="514" fill="#6F5893" font-family="IBM Plex Mono, Menlo, monospace" font-size="20">Paper2Slides/&lt;source-file-name&gt;/</text>
+  <rect x="556" y="714" width="180" height="92" rx="18" fill="#FFFFFF" stroke="#BDCBED" stroke-width="2"/>
+  <text x="582" y="752" fill="#2C4678" font-family="Inter, Avenir, sans-serif" font-size="24" font-weight="700">Plan</text>
+  <text x="582" y="780" fill="#5E7196" font-family="Inter, Avenir, sans-serif" font-size="18">shape the story</text>
 
-  <path d="M308 271H332" stroke="#8E7E68" stroke-width="6" stroke-linecap="round"/>
-  <path d="M332 271L319 258" stroke="#8E7E68" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M332 271L319 284" stroke="#8E7E68" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="774" y="714" width="180" height="92" rx="18" fill="#FFFFFF" stroke="#BDCBED" stroke-width="2"/>
+  <text x="800" y="752" fill="#2C4678" font-family="Inter, Avenir, sans-serif" font-size="24" font-weight="700">Generate</text>
+  <text x="800" y="780" fill="#5E7196" font-family="Inter, Avenir, sans-serif" font-size="18">render outputs</text>
 
-  <path d="M578 271H602" stroke="#8E7E68" stroke-width="6" stroke-linecap="round"/>
-  <path d="M602 271L589 258" stroke="#8E7E68" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M602 271L589 284" stroke="#8E7E68" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <line x1="300" y1="760" x2="326" y2="760" stroke="#748ABD" stroke-width="4" stroke-linecap="round"/>
+  <path d="M314 748L330 760L314 772" stroke="#748ABD" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <line x1="518" y1="760" x2="544" y2="760" stroke="#748ABD" stroke-width="4" stroke-linecap="round"/>
+  <path d="M532 748L548 760L532 772" stroke="#748ABD" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <line x1="736" y1="760" x2="762" y2="760" stroke="#748ABD" stroke-width="4" stroke-linecap="round"/>
+  <path d="M750 748L766 760L750 772" stroke="#748ABD" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
 
-  <path d="M759 364V377" stroke="#6D84B5" stroke-width="5" stroke-linecap="round"/>
-  <path d="M1015 364V377" stroke="#6D84B5" stroke-width="5" stroke-linecap="round"/>
-  <path d="M873 315H892" stroke="#6D84B5" stroke-width="5" stroke-linecap="round"/>
-  <path d="M892 315L881 304" stroke="#6D84B5" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M892 315L881 326" stroke="#6D84B5" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <line x1="540" y1="868" x2="540" y2="906" stroke="#8E74B6" stroke-width="6" stroke-linecap="round"/>
+  <path d="M528 894L540 910L552 894" stroke="#8E74B6" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
 
-  <path d="M620 465C573 497 520 514 470 514" stroke="#8F73B3" stroke-width="5" stroke-linecap="round"/>
-  <path d="M470 514L484 504" stroke="#8F73B3" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M470 514L483 524" stroke="#8F73B3" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
-
-  <text x="88" y="615" fill="#7C6D5F" font-family="Avenir, Inter, sans-serif" font-size="18">Diagram based on the actual stages and output layout in Paper2Slides, adapted for the Obsidian plugin README.</text>
+  <rect x="88" y="914" width="904" height="94" rx="24" fill="#F4EAFF" stroke="#B89DDE" stroke-width="2"/>
+  <text x="120" y="956" fill="#4A2D72" font-family="Inter, Avenir, sans-serif" font-size="24" font-weight="700">4. The plugin imports the newest summary, PDFs, and PNGs back into</text>
+  <text x="120" y="986" fill="#4A2D72" font-family="IBM Plex Mono, Menlo, monospace" font-size="24">Paper2Slides/&lt;name&gt;/</text>
 </svg>
