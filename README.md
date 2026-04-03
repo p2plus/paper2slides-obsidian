@@ -6,6 +6,8 @@ This is still work in progress. It is already useful for testing, but not someth
 
 This is a thin integration layer, not a reimplementation. All of the actual paper-to-slides work is done by the original `HKUDS/Paper2Slides` project.
 
+![Paper2Slides Obsidian pipeline](assets/pipeline-diagram.svg)
+
 ## Credit
 
 Huge credit to the original Paper2Slides authors and maintainers.
