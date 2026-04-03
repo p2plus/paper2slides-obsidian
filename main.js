@@ -72,6 +72,7 @@ var Paper2SlidesPlugin = class extends import_obsidian.Plugin {
     super(...arguments);
     this.activeRun = null;
     this.availableProviderModels = [];
+    this.providerStatus = null;
   }
   async onload() {
     await this.loadSettings();
@@ -199,6 +200,40 @@ var Paper2SlidesPlugin = class extends import_obsidian.Plugin {
     }
     return "";
   }
+  getDefaultModelForProvider(provider = this.settings.apiProvider) {
+    switch (provider) {
+      case "z_ai":
+        return "glm-5.1";
+      case "ollama":
+        return "llama3.1:8b";
+      case "lm_studio":
+        return "your-loaded-model";
+      case "anythingllm":
+        return "your-model-id";
+      default:
+        return "";
+    }
+  }
+  getEditableModelValue(provider = this.settings.apiProvider) {
+    if (provider === "z_ai") {
+      return this.getResolvedModel().trim() || this.getDefaultModelForProvider(provider);
+    }
+    return this.settings.localProviderModel.trim() || this.getDefaultModelForProvider(provider);
+  }
+  setProviderModel(provider, model) {
+    const trimmed = model.trim();
+    if (provider === "z_ai") {
+      if (!trimmed || trimmed === "glm-5.1") {
+        this.settings.zAiModelPreset = "glm-5.1";
+        this.settings.zAiCustomModel = "";
+        return;
+      }
+      this.settings.zAiModelPreset = "custom";
+      this.settings.zAiCustomModel = trimmed;
+      return;
+    }
+    this.settings.localProviderModel = trimmed || this.getDefaultModelForProvider(provider);
+  }
   getResolvedBaseUrl() {
     switch (this.settings.apiProvider) {
       case "z_ai":
@@ -237,6 +272,9 @@ var Paper2SlidesPlugin = class extends import_obsidian.Plugin {
     return {};
   }
   getProviderModelsUrl() {
+    if (this.settings.apiProvider === "ollama") {
+      return `${this.getResolvedBaseUrl().replace(/\/$/, "")}/api/tags`;
+    }
     return `${this.getResolvedBaseUrl().replace(/\/$/, "")}/models`;
   }
   async fetchJson(url, headers) {
@@ -252,8 +290,13 @@ var Paper2SlidesPlugin = class extends import_obsidian.Plugin {
         body = null;
       }
       return { ok: response.ok, status: response.status, body };
-    } catch (e) {
-      return { ok: false, status: 0, body: null };
+    } catch (error) {
+      return {
+        ok: false,
+        status: 0,
+        body: null,
+        error: error instanceof Error ? error.message : "Unknown request error."
+      };
     }
   }
   extractModelIds(body) {
@@ -270,9 +313,30 @@ var Paper2SlidesPlugin = class extends import_obsidian.Plugin {
         return (_b = (_a = candidate == null ? void 0 : candidate.id) != null ? _a : candidate == null ? void 0 : candidate.name) != null ? _b : candidate == null ? void 0 : candidate.model;
       }).filter((id) => typeof id === "string" && id.length > 0);
     }
+    if (Array.isArray(body.tags)) {
+      return body.tags.map((entry) => {
+        var _a;
+        const candidate = entry;
+        return (_a = candidate == null ? void 0 : candidate.name) != null ? _a : candidate == null ? void 0 : candidate.model;
+      }).filter((id) => typeof id === "string" && id.length > 0);
+    }
     return [];
   }
+  resetProviderUiState(provider) {
+    this.availableProviderModels = [];
+    this.providerStatus = null;
+    if (provider === "repo_defaults") {
+      return;
+    }
+    if (provider === "z_ai") {
+      this.settings.zAiModelPreset = "glm-5.1";
+      this.settings.zAiCustomModel = "";
+      return;
+    }
+    this.settings.localProviderModel = this.getDefaultModelForProvider(provider);
+  }
   async testSelectedProvider(showNotice = true) {
+    var _a;
     if (this.settings.apiProvider === "repo_defaults") {
       const result2 = { ok: true, lines: ["Repo defaults selected. No provider endpoint test to run."] };
       if (showNotice) {
@@ -292,16 +356,18 @@ var Paper2SlidesPlugin = class extends import_obsidian.Plugin {
     this.availableProviderModels = this.extractModelIds(response.body);
     const lines = [`Endpoint: ${this.getProviderModelsUrl()}`];
     if (response.ok) {
-      lines.push(`Connection works (${response.status}).`);
+      lines.push(`HTTP ${response.status}`);
       if (this.availableProviderModels.length > 0) {
         lines.push(`Found ${this.availableProviderModels.length} model(s).`);
       } else {
         lines.push("Connected, but no model list came back.");
       }
     } else {
-      lines.push(response.status > 0 ? `Request failed with status ${response.status}.` : "Could not reach the provider endpoint.");
+      lines.push(response.status > 0 ? `HTTP ${response.status}` : "No HTTP response");
+      lines.push((_a = response.error) != null ? _a : "Could not reach the provider endpoint.");
     }
     const result = { ok: response.ok, lines };
+    this.providerStatus = result;
     if (showNotice) {
       new import_obsidian.Notice(lines.join("\n"), 1e4);
     }
@@ -310,8 +376,9 @@ var Paper2SlidesPlugin = class extends import_obsidian.Plugin {
   async refreshProviderModels(showNotice = true) {
     const result = await this.testSelectedProvider(showNotice);
     if (result.ok && this.availableProviderModels.length > 0) {
-      if (!this.availableProviderModels.includes(this.settings.localProviderModel)) {
-        this.settings.localProviderModel = this.availableProviderModels[0];
+      const selectedModel = this.getEditableModelValue();
+      if (!this.availableProviderModels.includes(selectedModel)) {
+        this.setProviderModel(this.settings.apiProvider, this.availableProviderModels[0]);
         await this.saveSettings();
       }
     }
@@ -710,20 +777,31 @@ var Paper2SlidesSettingTab = class extends import_obsidian.PluginSettingTab {
       await this.plugin.saveSettings();
     }));
     containerEl.createEl("h3", { text: "API" });
-    new import_obsidian.Setting(containerEl).setName("API provider").setDesc("Use the repo defaults, or override the LLM settings with Z.AI from inside Obsidian.").addDropdown((dropdown) => dropdown.addOption("repo_defaults", "Use repo defaults").addOption("z_ai", "Z AI").addOption("lm_studio", "LM Studio").addOption("ollama", "Ollama").addOption("anythingllm", "AnythingLLM").setValue(this.plugin.settings.apiProvider).onChange(async (value) => {
+    new import_obsidian.Setting(containerEl).setName("API provider").setDesc("Use the repo defaults, or point Paper2Slides at a specific hosted or local model endpoint.").addDropdown((dropdown) => dropdown.addOption("repo_defaults", "Use repo defaults").addOption("z_ai", "Z AI").addOption("lm_studio", "LM Studio").addOption("ollama", "Ollama").addOption("anythingllm", "AnythingLLM").setValue(this.plugin.settings.apiProvider).onChange(async (value) => {
       this.plugin.settings.apiProvider = value;
-      if (value === "lm_studio" && !this.plugin.settings.localProviderBaseUrl.trim()) {
+      if (value === "lm_studio") {
         this.plugin.settings.localProviderBaseUrl = LM_STUDIO_BASE_URL;
       }
-      if (value === "ollama" && !this.plugin.settings.localProviderBaseUrl.trim()) {
+      if (value === "ollama") {
         this.plugin.settings.localProviderBaseUrl = OLLAMA_BASE_URL;
       }
+      this.plugin.resetProviderUiState(value);
       await this.plugin.saveSettings();
       this.display();
     }));
     new import_obsidian.Setting(containerEl).setName("Provider check").setDesc("Ping the selected provider endpoint from inside Obsidian.").addButton((button) => button.setButtonText("Test provider").onClick(async () => {
       await this.plugin.testSelectedProvider(true);
+      this.display();
     }));
+    if (this.plugin.providerStatus) {
+      const statusEl = containerEl.createDiv({ cls: "paper2slides-provider-status" });
+      statusEl.createEl("strong", {
+        text: this.plugin.providerStatus.ok ? "\u2705 Provider reachable" : "\u274C Provider check failed"
+      });
+      for (const line of this.plugin.providerStatus.lines) {
+        statusEl.createEl("div", { text: line });
+      }
+    }
     if (this.plugin.settings.apiProvider === "z_ai") {
       new import_obsidian.Setting(containerEl).setName("Z AI entrypoint").setDesc("Currently wired to the International Coding Plan endpoint.").addDropdown((dropdown) => dropdown.addOption("international_coding_plan", "International Coding Plan").setValue(this.plugin.settings.zAiEntrypoint).onChange(async (value) => {
         this.plugin.settings.zAiEntrypoint = value;
@@ -733,16 +811,26 @@ var Paper2SlidesSettingTab = class extends import_obsidian.PluginSettingTab {
         this.plugin.settings.zAiApiKey = value.trim();
         await this.plugin.saveSettings();
       }));
-      new import_obsidian.Setting(containerEl).setName("Model").setDesc("Pick glm-5.1, or switch to custom and enter another Z.AI model id.").addDropdown((dropdown) => dropdown.addOption("glm-5.1", "glm-5.1").addOption("custom", "Custom").setValue(this.plugin.settings.zAiModelPreset).onChange(async (value) => {
-        this.plugin.settings.zAiModelPreset = value;
+      new import_obsidian.Setting(containerEl).setName("Model").setDesc("Refresh the live model list, or type a model id directly.").addText((text) => text.setPlaceholder(this.plugin.getDefaultModelForProvider("z_ai")).setValue(this.plugin.getEditableModelValue("z_ai")).onChange(async (value) => {
+        this.plugin.setProviderModel("z_ai", value);
         await this.plugin.saveSettings();
+      }));
+      new import_obsidian.Setting(containerEl).setName("Z AI model list").setDesc("Fetch the current models exposed by the selected endpoint.").addButton((button) => button.setButtonText("Refresh models").onClick(async () => {
+        await this.plugin.refreshProviderModels(true);
         this.display();
       }));
-      if (this.plugin.settings.zAiModelPreset === "custom") {
-        new import_obsidian.Setting(containerEl).setName("Custom model id").setDesc("Use this for any other model from the Z.AI list.").addText((text) => text.setPlaceholder("glm-5.1").setValue(this.plugin.settings.zAiCustomModel).onChange(async (value) => {
-          this.plugin.settings.zAiCustomModel = value.trim();
-          await this.plugin.saveSettings();
-        }));
+      if (this.plugin.availableProviderModels.length > 0) {
+        new import_obsidian.Setting(containerEl).setName("Detected models").setDesc("Choose one of the models returned by Z AI.").addDropdown((dropdown) => {
+          for (const model of this.plugin.availableProviderModels) {
+            dropdown.addOption(model, model);
+          }
+          const selected = this.plugin.availableProviderModels.includes(this.plugin.getEditableModelValue("z_ai")) ? this.plugin.getEditableModelValue("z_ai") : this.plugin.availableProviderModels[0];
+          dropdown.setValue(selected);
+          dropdown.onChange(async (value) => {
+            this.plugin.setProviderModel("z_ai", value);
+            await this.plugin.saveSettings();
+          });
+        });
       }
     } else if (this.plugin.settings.apiProvider === "lm_studio" || this.plugin.settings.apiProvider === "ollama") {
       const providerName = this.plugin.settings.apiProvider === "lm_studio" ? "LM Studio" : "Ollama";
@@ -751,15 +839,15 @@ var Paper2SlidesSettingTab = class extends import_obsidian.PluginSettingTab {
         this.plugin.settings.localProviderBaseUrl = value.trim() || defaultBaseUrl;
         await this.plugin.saveSettings();
       }));
-      new import_obsidian.Setting(containerEl).setName(`${providerName} model`).setDesc("Model id exposed by your local server.").addText((text) => text.setPlaceholder(this.plugin.settings.apiProvider === "ollama" ? "llama3.1:8b" : "your-loaded-model").setValue(this.plugin.settings.localProviderModel).onChange(async (value) => {
-        this.plugin.settings.localProviderModel = value.trim();
+      new import_obsidian.Setting(containerEl).setName(`${providerName} model`).setDesc("Model id exposed by your local server.").addText((text) => text.setPlaceholder(this.plugin.getDefaultModelForProvider(this.plugin.settings.apiProvider)).setValue(this.plugin.getEditableModelValue()).onChange(async (value) => {
+        this.plugin.setProviderModel(this.plugin.settings.apiProvider, value);
         await this.plugin.saveSettings();
       }));
       new import_obsidian.Setting(containerEl).setName(`${providerName} API key`).setDesc("Optional. If blank, the plugin injects a harmless local placeholder token.").addText((text) => text.setPlaceholder("optional").setValue(this.plugin.settings.localProviderApiKey).onChange(async (value) => {
         this.plugin.settings.localProviderApiKey = value.trim();
         await this.plugin.saveSettings();
       }));
-      new import_obsidian.Setting(containerEl).setName(`${providerName} model list`).setDesc("Ask the local endpoint for available models.").addButton((button) => button.setButtonText("Load models").onClick(async () => {
+      new import_obsidian.Setting(containerEl).setName(`${providerName} model list`).setDesc(`Fetch the current model list from ${this.plugin.settings.apiProvider === "ollama" ? "/api/tags" : "/models"}.`).addButton((button) => button.setButtonText("Refresh models").onClick(async () => {
         await this.plugin.refreshProviderModels(true);
         this.display();
       }));
@@ -771,7 +859,7 @@ var Paper2SlidesSettingTab = class extends import_obsidian.PluginSettingTab {
           const selected = this.plugin.availableProviderModels.includes(this.plugin.settings.localProviderModel) ? this.plugin.settings.localProviderModel : this.plugin.availableProviderModels[0];
           dropdown.setValue(selected);
           dropdown.onChange(async (value) => {
-            this.plugin.settings.localProviderModel = value;
+            this.plugin.setProviderModel(this.plugin.settings.apiProvider, value);
             await this.plugin.saveSettings();
           });
         });
@@ -781,15 +869,15 @@ var Paper2SlidesSettingTab = class extends import_obsidian.PluginSettingTab {
         this.plugin.settings.anythingllmBaseUrl = value.trim();
         await this.plugin.saveSettings();
       }));
-      new import_obsidian.Setting(containerEl).setName("AnythingLLM model").setDesc("Model id served through your local AnythingLLM endpoint.").addText((text) => text.setPlaceholder("your-model-id").setValue(this.plugin.settings.localProviderModel).onChange(async (value) => {
-        this.plugin.settings.localProviderModel = value.trim();
+      new import_obsidian.Setting(containerEl).setName("AnythingLLM model").setDesc("Model id served through your local AnythingLLM endpoint.").addText((text) => text.setPlaceholder(this.plugin.getDefaultModelForProvider("anythingllm")).setValue(this.plugin.getEditableModelValue("anythingllm")).onChange(async (value) => {
+        this.plugin.setProviderModel("anythingllm", value);
         await this.plugin.saveSettings();
       }));
       new import_obsidian.Setting(containerEl).setName("AnythingLLM API key").setDesc("Optional here, but fill it in if your AnythingLLM API access requires one.").addText((text) => text.setPlaceholder("optional").setValue(this.plugin.settings.localProviderApiKey).onChange(async (value) => {
         this.plugin.settings.localProviderApiKey = value.trim();
         await this.plugin.saveSettings();
       }));
-      new import_obsidian.Setting(containerEl).setName("AnythingLLM check").setDesc("Test the endpoint and try to fetch a model list.").addButton((button) => button.setButtonText("Test and load").onClick(async () => {
+      new import_obsidian.Setting(containerEl).setName("AnythingLLM check").setDesc("Test the endpoint and fetch the live model list from /models.").addButton((button) => button.setButtonText("Refresh models").onClick(async () => {
         await this.plugin.refreshProviderModels(true);
         this.display();
       }));
@@ -801,7 +889,7 @@ var Paper2SlidesSettingTab = class extends import_obsidian.PluginSettingTab {
           const selected = this.plugin.availableProviderModels.includes(this.plugin.settings.localProviderModel) ? this.plugin.settings.localProviderModel : this.plugin.availableProviderModels[0];
           dropdown.setValue(selected);
           dropdown.onChange(async (value) => {
-            this.plugin.settings.localProviderModel = value;
+            this.plugin.setProviderModel("anythingllm", value);
             await this.plugin.saveSettings();
           });
         });

@@ -54,6 +54,13 @@ interface ProviderTestResult {
 	lines: string[];
 }
 
+interface FetchJsonResult {
+	ok: boolean;
+	status: number;
+	body: any;
+	error?: string;
+}
+
 const DEFAULT_SETTINGS: Paper2SlidesSettings = {
 	pythonPath: 'python3',
 	p2sPath: '',
@@ -86,6 +93,7 @@ export default class Paper2SlidesPlugin extends Plugin {
 	settings: Paper2SlidesSettings;
 	activeRun: RunContext | null = null;
 	availableProviderModels: string[] = [];
+	providerStatus: ProviderTestResult | null = null;
 
 	async onload() {
 		await this.loadSettings();
@@ -240,6 +248,45 @@ export default class Paper2SlidesPlugin extends Plugin {
 		return '';
 	}
 
+	getDefaultModelForProvider(provider = this.settings.apiProvider): string {
+		switch (provider) {
+			case 'z_ai':
+				return 'glm-5.1';
+			case 'ollama':
+				return 'llama3.1:8b';
+			case 'lm_studio':
+				return 'your-loaded-model';
+			case 'anythingllm':
+				return 'your-model-id';
+			default:
+				return '';
+		}
+	}
+
+	getEditableModelValue(provider = this.settings.apiProvider): string {
+		if (provider === 'z_ai') {
+			return this.getResolvedModel().trim() || this.getDefaultModelForProvider(provider);
+		}
+
+		return this.settings.localProviderModel.trim() || this.getDefaultModelForProvider(provider);
+	}
+
+	setProviderModel(provider: ApiProvider, model: string): void {
+		const trimmed = model.trim();
+		if (provider === 'z_ai') {
+			if (!trimmed || trimmed === 'glm-5.1') {
+				this.settings.zAiModelPreset = 'glm-5.1';
+				this.settings.zAiCustomModel = '';
+				return;
+			}
+			this.settings.zAiModelPreset = 'custom';
+			this.settings.zAiCustomModel = trimmed;
+			return;
+		}
+
+		this.settings.localProviderModel = trimmed || this.getDefaultModelForProvider(provider);
+	}
+
 	private getResolvedBaseUrl(): string {
 		switch (this.settings.apiProvider) {
 			case 'z_ai':
@@ -285,10 +332,13 @@ export default class Paper2SlidesPlugin extends Plugin {
 	}
 
 	private getProviderModelsUrl(): string {
+		if (this.settings.apiProvider === 'ollama') {
+			return `${this.getResolvedBaseUrl().replace(/\/$/, '')}/api/tags`;
+		}
 		return `${this.getResolvedBaseUrl().replace(/\/$/, '')}/models`;
 	}
 
-	private async fetchJson(url: string, headers: Record<string, string>): Promise<{ ok: boolean; status: number; body: any }> {
+	private async fetchJson(url: string, headers: Record<string, string>): Promise<FetchJsonResult> {
 		try {
 			const response = await fetch(url, {
 				method: 'GET',
@@ -301,8 +351,13 @@ export default class Paper2SlidesPlugin extends Plugin {
 				body = null;
 			}
 			return { ok: response.ok, status: response.status, body };
-		} catch {
-			return { ok: false, status: 0, body: null };
+		} catch (error) {
+			return {
+				ok: false,
+				status: 0,
+				body: null,
+				error: error instanceof Error ? error.message : 'Unknown request error.',
+			};
 		}
 	}
 
@@ -326,7 +381,30 @@ export default class Paper2SlidesPlugin extends Plugin {
 				.filter((id: unknown): id is string => typeof id === 'string' && id.length > 0);
 		}
 
+		if (Array.isArray(body.tags)) {
+			return body.tags
+				.map((entry: unknown) => {
+					const candidate = entry as { name?: unknown; model?: unknown };
+					return candidate?.name ?? candidate?.model;
+				})
+				.filter((id: unknown): id is string => typeof id === 'string' && id.length > 0);
+		}
+
 		return [];
+	}
+
+	resetProviderUiState(provider: ApiProvider): void {
+		this.availableProviderModels = [];
+		this.providerStatus = null;
+		if (provider === 'repo_defaults') {
+			return;
+		}
+		if (provider === 'z_ai') {
+			this.settings.zAiModelPreset = 'glm-5.1';
+			this.settings.zAiCustomModel = '';
+			return;
+		}
+		this.settings.localProviderModel = this.getDefaultModelForProvider(provider);
 	}
 
 	async testSelectedProvider(showNotice = true): Promise<ProviderTestResult> {
@@ -352,17 +430,19 @@ export default class Paper2SlidesPlugin extends Plugin {
 
 		const lines = [`Endpoint: ${this.getProviderModelsUrl()}`];
 		if (response.ok) {
-			lines.push(`Connection works (${response.status}).`);
+			lines.push(`HTTP ${response.status}`);
 			if (this.availableProviderModels.length > 0) {
 				lines.push(`Found ${this.availableProviderModels.length} model(s).`);
 			} else {
 				lines.push('Connected, but no model list came back.');
 			}
 		} else {
-			lines.push(response.status > 0 ? `Request failed with status ${response.status}.` : 'Could not reach the provider endpoint.');
+			lines.push(response.status > 0 ? `HTTP ${response.status}` : 'No HTTP response');
+			lines.push(response.error ?? 'Could not reach the provider endpoint.');
 		}
 
 		const result = { ok: response.ok, lines };
+		this.providerStatus = result;
 		if (showNotice) {
 			new Notice(lines.join('\n'), 10000);
 		}
@@ -372,8 +452,9 @@ export default class Paper2SlidesPlugin extends Plugin {
 	async refreshProviderModels(showNotice = true): Promise<string[]> {
 		const result = await this.testSelectedProvider(showNotice);
 		if (result.ok && this.availableProviderModels.length > 0) {
-			if (!this.availableProviderModels.includes(this.settings.localProviderModel)) {
-				this.settings.localProviderModel = this.availableProviderModels[0];
+			const selectedModel = this.getEditableModelValue();
+			if (!this.availableProviderModels.includes(selectedModel)) {
+				this.setProviderModel(this.settings.apiProvider, this.availableProviderModels[0]);
 				await this.saveSettings();
 			}
 		}
@@ -863,7 +944,7 @@ class Paper2SlidesSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('API provider')
-			.setDesc('Use the repo defaults, or override the LLM settings with Z.AI from inside Obsidian.')
+			.setDesc('Use the repo defaults, or point Paper2Slides at a specific hosted or local model endpoint.')
 			.addDropdown((dropdown) => dropdown
 				.addOption('repo_defaults', 'Use repo defaults')
 				.addOption('z_ai', 'Z AI')
@@ -873,12 +954,13 @@ class Paper2SlidesSettingTab extends PluginSettingTab {
 				.setValue(this.plugin.settings.apiProvider)
 				.onChange(async (value: ApiProvider) => {
 					this.plugin.settings.apiProvider = value;
-					if (value === 'lm_studio' && !this.plugin.settings.localProviderBaseUrl.trim()) {
+					if (value === 'lm_studio') {
 						this.plugin.settings.localProviderBaseUrl = LM_STUDIO_BASE_URL;
 					}
-					if (value === 'ollama' && !this.plugin.settings.localProviderBaseUrl.trim()) {
+					if (value === 'ollama') {
 						this.plugin.settings.localProviderBaseUrl = OLLAMA_BASE_URL;
 					}
+					this.plugin.resetProviderUiState(value);
 					await this.plugin.saveSettings();
 					this.display();
 				}));
@@ -890,7 +972,18 @@ class Paper2SlidesSettingTab extends PluginSettingTab {
 				.setButtonText('Test provider')
 				.onClick(async () => {
 					await this.plugin.testSelectedProvider(true);
+					this.display();
 				}));
+
+		if (this.plugin.providerStatus) {
+			const statusEl = containerEl.createDiv({ cls: 'paper2slides-provider-status' });
+			statusEl.createEl('strong', {
+				text: this.plugin.providerStatus.ok ? '✅ Provider reachable' : '❌ Provider check failed',
+			});
+			for (const line of this.plugin.providerStatus.lines) {
+				statusEl.createEl('div', { text: line });
+			}
+		}
 
 		if (this.plugin.settings.apiProvider === 'z_ai') {
 			new Setting(containerEl)
@@ -917,28 +1010,42 @@ class Paper2SlidesSettingTab extends PluginSettingTab {
 
 			new Setting(containerEl)
 				.setName('Model')
-				.setDesc('Pick glm-5.1, or switch to custom and enter another Z.AI model id.')
-				.addDropdown((dropdown) => dropdown
-					.addOption('glm-5.1', 'glm-5.1')
-					.addOption('custom', 'Custom')
-					.setValue(this.plugin.settings.zAiModelPreset)
-					.onChange(async (value: ZAiModelPreset) => {
-						this.plugin.settings.zAiModelPreset = value;
+				.setDesc('Refresh the live model list, or type a model id directly.')
+				.addText((text) => text
+					.setPlaceholder(this.plugin.getDefaultModelForProvider('z_ai'))
+					.setValue(this.plugin.getEditableModelValue('z_ai'))
+					.onChange(async (value) => {
+						this.plugin.setProviderModel('z_ai', value);
 						await this.plugin.saveSettings();
+					}));
+
+			new Setting(containerEl)
+				.setName('Z AI model list')
+				.setDesc('Fetch the current models exposed by the selected endpoint.')
+				.addButton((button) => button
+					.setButtonText('Refresh models')
+					.onClick(async () => {
+						await this.plugin.refreshProviderModels(true);
 						this.display();
 					}));
 
-			if (this.plugin.settings.zAiModelPreset === 'custom') {
+			if (this.plugin.availableProviderModels.length > 0) {
 				new Setting(containerEl)
-					.setName('Custom model id')
-					.setDesc('Use this for any other model from the Z.AI list.')
-					.addText((text) => text
-						.setPlaceholder('glm-5.1')
-						.setValue(this.plugin.settings.zAiCustomModel)
-						.onChange(async (value) => {
-							this.plugin.settings.zAiCustomModel = value.trim();
+					.setName('Detected models')
+					.setDesc('Choose one of the models returned by Z AI.')
+					.addDropdown((dropdown) => {
+						for (const model of this.plugin.availableProviderModels) {
+							dropdown.addOption(model, model);
+						}
+						const selected = this.plugin.availableProviderModels.includes(this.plugin.getEditableModelValue('z_ai'))
+							? this.plugin.getEditableModelValue('z_ai')
+							: this.plugin.availableProviderModels[0];
+						dropdown.setValue(selected);
+						dropdown.onChange(async (value) => {
+							this.plugin.setProviderModel('z_ai', value);
 							await this.plugin.saveSettings();
-						}));
+						});
+					});
 			}
 		} else if (this.plugin.settings.apiProvider === 'lm_studio' || this.plugin.settings.apiProvider === 'ollama') {
 			const providerName = this.plugin.settings.apiProvider === 'lm_studio' ? 'LM Studio' : 'Ollama';
@@ -959,10 +1066,10 @@ class Paper2SlidesSettingTab extends PluginSettingTab {
 				.setName(`${providerName} model`)
 				.setDesc('Model id exposed by your local server.')
 				.addText((text) => text
-					.setPlaceholder(this.plugin.settings.apiProvider === 'ollama' ? 'llama3.1:8b' : 'your-loaded-model')
-					.setValue(this.plugin.settings.localProviderModel)
+					.setPlaceholder(this.plugin.getDefaultModelForProvider(this.plugin.settings.apiProvider))
+					.setValue(this.plugin.getEditableModelValue())
 					.onChange(async (value) => {
-						this.plugin.settings.localProviderModel = value.trim();
+						this.plugin.setProviderModel(this.plugin.settings.apiProvider, value);
 						await this.plugin.saveSettings();
 					}));
 
@@ -979,9 +1086,9 @@ class Paper2SlidesSettingTab extends PluginSettingTab {
 
 			new Setting(containerEl)
 				.setName(`${providerName} model list`)
-				.setDesc('Ask the local endpoint for available models.')
+				.setDesc(`Fetch the current model list from ${this.plugin.settings.apiProvider === 'ollama' ? '/api/tags' : '/models'}.`)
 				.addButton((button) => button
-					.setButtonText('Load models')
+					.setButtonText('Refresh models')
 					.onClick(async () => {
 						await this.plugin.refreshProviderModels(true);
 						this.display();
@@ -1000,7 +1107,7 @@ class Paper2SlidesSettingTab extends PluginSettingTab {
 							: this.plugin.availableProviderModels[0];
 						dropdown.setValue(selected);
 						dropdown.onChange(async (value) => {
-							this.plugin.settings.localProviderModel = value;
+							this.plugin.setProviderModel(this.plugin.settings.apiProvider, value);
 							await this.plugin.saveSettings();
 						});
 					});
@@ -1021,10 +1128,10 @@ class Paper2SlidesSettingTab extends PluginSettingTab {
 				.setName('AnythingLLM model')
 				.setDesc('Model id served through your local AnythingLLM endpoint.')
 				.addText((text) => text
-					.setPlaceholder('your-model-id')
-					.setValue(this.plugin.settings.localProviderModel)
+					.setPlaceholder(this.plugin.getDefaultModelForProvider('anythingllm'))
+					.setValue(this.plugin.getEditableModelValue('anythingllm'))
 					.onChange(async (value) => {
-						this.plugin.settings.localProviderModel = value.trim();
+						this.plugin.setProviderModel('anythingllm', value);
 						await this.plugin.saveSettings();
 					}));
 
@@ -1041,9 +1148,9 @@ class Paper2SlidesSettingTab extends PluginSettingTab {
 
 			new Setting(containerEl)
 				.setName('AnythingLLM check')
-				.setDesc('Test the endpoint and try to fetch a model list.')
+				.setDesc('Test the endpoint and fetch the live model list from /models.')
 				.addButton((button) => button
-					.setButtonText('Test and load')
+					.setButtonText('Refresh models')
 					.onClick(async () => {
 						await this.plugin.refreshProviderModels(true);
 						this.display();
@@ -1062,7 +1169,7 @@ class Paper2SlidesSettingTab extends PluginSettingTab {
 							: this.plugin.availableProviderModels[0];
 						dropdown.setValue(selected);
 						dropdown.onChange(async (value) => {
-							this.plugin.settings.localProviderModel = value;
+							this.plugin.setProviderModel('anythingllm', value);
 							await this.plugin.saveSettings();
 						});
 					});
