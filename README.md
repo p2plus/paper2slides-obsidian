@@ -1,71 +1,56 @@
 # Paper2Slides for Obsidian (WIP)
 
-An Obsidian desktop plugin that lets you run [Paper2Slides](https://github.com/HKUDS/Paper2Slides) against a PDF or Markdown note and pull the newest outputs back into your vault.
+An Obsidian desktop plugin for kicking off [Paper2Slides](https://github.com/HKUDS/Paper2Slides) from inside your vault and pulling the newest outputs back in.
 
-This is still work in progress. It is already useful for testing, but not something I would call polished yet.
+This is still WIP. It already works well enough for testing, but it is not polished yet.
 
-This is a thin integration layer, not a reimplementation. All of the actual paper-to-slides work is done by the original `HKUDS/Paper2Slides` project.
-
-The plugin does not render slides on its own. It just connects Obsidian to a local `Paper2Slides` checkout and runs the upstream CLI for you.
+The plugin does not generate slides by itself. It just hands the selected file to a local `Paper2Slides` checkout and lets the upstream pipeline do the real work.
 
 ![Paper2Slides Obsidian pipeline](assets/pipeline-diagram.svg)
 
 ## Use it in 30 seconds
 
-1. Install and configure the original `Paper2Slides` repo so the CLI works on your machine
-2. In Obsidian, open this plugin's settings
-3. Set `Python command` to something that works on your machine, usually `python3`
-4. Set `Paper2Slides repo path` to your local `Paper2Slides` checkout
-5. Right-click a PDF or Markdown file in the vault
-6. Click `Generate Slides/Poster (Paper2Slides)`
-7. Wait for the run to finish and check `Paper2Slides/<source-file-name>/` in your vault
+1. Get the original `Paper2Slides` repo running on your machine
+2. Make sure its Python deps, API keys, and CLI are working
+3. Open this plugin's settings in Obsidian
+4. Set `Python command`, usually `python3`
+5. Set `Paper2Slides repo path` to your local checkout
+6. Right-click a PDF or Markdown file in the vault
+7. Run `Generate Slides/Poster (Paper2Slides)`
+8. Open `Paper2Slides/<source-file-name>/` in your vault
 
-If the Python environment, dependencies, or API keys are broken in the original `Paper2Slides` repo, this plugin will not generate anything either.
+If the upstream `Paper2Slides` setup is broken, this plugin will not produce anything either.
 
-## What actually happens
+## What happens under the hood
 
-- The plugin takes the file you clicked in Obsidian
-- It starts the local `Paper2Slides` CLI with that file as input
-- `Paper2Slides` does the real work: parse, summarize, plan, generate
-- The plugin imports the newest output files back into your vault
+- PDF files run in `paper` mode
+- Markdown files run in `general` mode
+- The plugin starts `python3 -m paper2slides`
+- `Paper2Slides` handles parsing, summary, planning, and generation
+- The plugin imports the newest summary, PDFs, and PNGs back into the vault
 
 Example:
-Right-click `paper.pdf` or `notes.md` in Obsidian, run `Generate Slides/Poster (Paper2Slides)`, then open `Paper2Slides/paper/` or `Paper2Slides/notes/` in the vault to inspect the imported results
-
-## Credit
-
-Huge credit to the original Paper2Slides authors and maintainers.
-
-- Original project: [HKUDS/Paper2Slides](https://github.com/HKUDS/Paper2Slides)
-- This plugin exists to make that workflow feel less clunky inside Obsidian
-
-## What it does right now
-
-- Adds a context-menu action for `.pdf` and `.md` files
-- Adds a command-palette command for the current file
-- Runs `python3 -m paper2slides` from your configured checkout
-- Treats PDFs as `paper` content and Markdown files as `general` content
-- Imports the newest generated summary, PDFs, and PNGs into `Paper2Slides/<source-file-name>/` inside your vault
+Right-click `paper.pdf` or `notes.md`, run `Generate Slides/Poster (Paper2Slides)`, then check `Paper2Slides/paper/` or `Paper2Slides/notes/`.
 
 ## Setup
 
-1. Clone and set up the original Paper2Slides repo
-2. Install its Python dependencies and API keys
+1. Clone the original `Paper2Slides` repo
+2. Install its dependencies and configure its `.env`
 3. Run `npm install`
 4. Run `npm run build`
-5. Copy `manifest.json`, `main.js`, and `versions.json` into your vault under `.obsidian/plugins/paper2slides-obsidian/`
-6. In Obsidian settings, set:
-   - `Python command`: usually `python3`
-   - `Paper2Slides repo path`: absolute path to your local Paper2Slides checkout
+5. Copy `manifest.json`, `main.js`, and `versions.json` into `.obsidian/plugins/paper2slides-obsidian/`
+6. Enable the plugin in Obsidian
 
-## Dev notes
+## Current state
 
+- Desktop-only, because it shells out to local Python
 - No hardcoded personal Python path
-- No assumption that your vault sits inside the Paper2Slides repo
-- If your Python lives in a venv, you can still point the plugin directly at it
+- Assumes the upstream `Paper2Slides` output layout stays roughly stable
+- Good for testing, not ready to call finished
 
-## Current rough edges
+## Credit
 
-- This is desktop-only because it shells out to a local Python process
-- The plugin assumes the upstream Paper2Slides output layout stays stable
-- Community-plugin release plumbing is started here, but publishing still means packaging releases and testing on a clean vault
+This repo only covers the Obsidian side of the workflow.
+
+- Original project: [HKUDS/Paper2Slides](https://github.com/HKUDS/Paper2Slides)
+- The actual slide generation pipeline lives there
