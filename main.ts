@@ -49,6 +49,11 @@ interface ValidationResult {
 	lines: string[];
 }
 
+interface ProviderTestResult {
+	ok: boolean;
+	lines: string[];
+}
+
 const DEFAULT_SETTINGS: Paper2SlidesSettings = {
 	pythonPath: 'python3',
 	p2sPath: '',
@@ -80,6 +85,7 @@ const OLLAMA_BASE_URL = 'http://localhost:11434/v1';
 export default class Paper2SlidesPlugin extends Plugin {
 	settings: Paper2SlidesSettings;
 	activeRun: RunContext | null = null;
+	availableProviderModels: string[] = [];
 
 	async onload() {
 		await this.loadSettings();
@@ -154,6 +160,22 @@ export default class Paper2SlidesPlugin extends Plugin {
 			name: 'Check Paper2Slides setup',
 			callback: async () => {
 				await this.runSetupCheck(true);
+			},
+		});
+
+		this.addCommand({
+			id: 'test-selected-provider',
+			name: 'Test selected provider',
+			callback: async () => {
+				await this.testSelectedProvider(true);
+			},
+		});
+
+		this.addCommand({
+			id: 'refresh-provider-models',
+			name: 'Refresh provider model list',
+			callback: async () => {
+				await this.refreshProviderModels(true);
 			},
 		});
 
@@ -245,6 +267,117 @@ export default class Paper2SlidesPlugin extends Plugin {
 			env.LLM_MODEL = this.getResolvedModel();
 		}
 		return env;
+	}
+
+	private getProviderHeaders(): Record<string, string> {
+		if (this.settings.apiProvider === 'z_ai') {
+			return this.settings.zAiApiKey.trim()
+				? { Authorization: `Bearer ${this.settings.zAiApiKey.trim()}` }
+				: {};
+		}
+
+		if (this.settings.apiProvider === 'lm_studio' || this.settings.apiProvider === 'ollama' || this.settings.apiProvider === 'anythingllm') {
+			const token = this.settings.localProviderApiKey.trim();
+			return token ? { Authorization: `Bearer ${token}` } : {};
+		}
+
+		return {};
+	}
+
+	private getProviderModelsUrl(): string {
+		return `${this.getResolvedBaseUrl().replace(/\/$/, '')}/models`;
+	}
+
+	private async fetchJson(url: string, headers: Record<string, string>): Promise<{ ok: boolean; status: number; body: any }> {
+		try {
+			const response = await fetch(url, {
+				method: 'GET',
+				headers,
+			});
+			let body: any = null;
+			try {
+				body = await response.json();
+			} catch {
+				body = null;
+			}
+			return { ok: response.ok, status: response.status, body };
+		} catch {
+			return { ok: false, status: 0, body: null };
+		}
+	}
+
+	private extractModelIds(body: any): string[] {
+		if (!body) {
+			return [];
+		}
+
+		if (Array.isArray(body.data)) {
+			return body.data
+				.map((entry: unknown) => (entry as { id?: unknown })?.id)
+				.filter((id: unknown): id is string => typeof id === 'string' && id.length > 0);
+		}
+
+		if (Array.isArray(body.models)) {
+			return body.models
+				.map((entry: unknown) => {
+					const candidate = entry as { id?: unknown; name?: unknown; model?: unknown };
+					return candidate?.id ?? candidate?.name ?? candidate?.model;
+				})
+				.filter((id: unknown): id is string => typeof id === 'string' && id.length > 0);
+		}
+
+		return [];
+	}
+
+	async testSelectedProvider(showNotice = true): Promise<ProviderTestResult> {
+		if (this.settings.apiProvider === 'repo_defaults') {
+			const result = { ok: true, lines: ['Repo defaults selected. No provider endpoint test to run.'] };
+			if (showNotice) {
+				new Notice(result.lines.join('\n'), 8000);
+			}
+			return result;
+		}
+
+		const baseUrl = this.getResolvedBaseUrl();
+		if (!baseUrl) {
+			const result = { ok: false, lines: ['Missing provider base URL.'] };
+			if (showNotice) {
+				new Notice(result.lines.join('\n'), 8000);
+			}
+			return result;
+		}
+
+		const response = await this.fetchJson(this.getProviderModelsUrl(), this.getProviderHeaders());
+		this.availableProviderModels = this.extractModelIds(response.body);
+
+		const lines = [`Endpoint: ${this.getProviderModelsUrl()}`];
+		if (response.ok) {
+			lines.push(`Connection works (${response.status}).`);
+			if (this.availableProviderModels.length > 0) {
+				lines.push(`Found ${this.availableProviderModels.length} model(s).`);
+			} else {
+				lines.push('Connected, but no model list came back.');
+			}
+		} else {
+			lines.push(response.status > 0 ? `Request failed with status ${response.status}.` : 'Could not reach the provider endpoint.');
+		}
+
+		const result = { ok: response.ok, lines };
+		if (showNotice) {
+			new Notice(lines.join('\n'), 10000);
+		}
+		return result;
+	}
+
+	async refreshProviderModels(showNotice = true): Promise<string[]> {
+		const result = await this.testSelectedProvider(showNotice);
+		if (result.ok && this.availableProviderModels.length > 0) {
+			if (!this.availableProviderModels.includes(this.settings.localProviderModel)) {
+				this.settings.localProviderModel = this.availableProviderModels[0];
+				await this.saveSettings();
+			}
+		}
+		return this.availableProviderModels;
 	}
 
 	private async ensureVaultFolder(folderPath: string): Promise<void> {
@@ -750,6 +883,15 @@ class Paper2SlidesSettingTab extends PluginSettingTab {
 					this.display();
 				}));
 
+		new Setting(containerEl)
+			.setName('Provider check')
+			.setDesc('Ping the selected provider endpoint from inside Obsidian.')
+			.addButton((button) => button
+				.setButtonText('Test provider')
+				.onClick(async () => {
+					await this.plugin.testSelectedProvider(true);
+				}));
+
 		if (this.plugin.settings.apiProvider === 'z_ai') {
 			new Setting(containerEl)
 				.setName('Z AI entrypoint')
@@ -834,6 +976,35 @@ class Paper2SlidesSettingTab extends PluginSettingTab {
 						this.plugin.settings.localProviderApiKey = value.trim();
 						await this.plugin.saveSettings();
 					}));
+
+			new Setting(containerEl)
+				.setName(`${providerName} model list`)
+				.setDesc('Ask the local endpoint for available models.')
+				.addButton((button) => button
+					.setButtonText('Load models')
+					.onClick(async () => {
+						await this.plugin.refreshProviderModels(true);
+						this.display();
+					}));
+
+			if (this.plugin.availableProviderModels.length > 0) {
+				new Setting(containerEl)
+					.setName(`${providerName} detected models`)
+					.setDesc('Choose one of the models returned by the local server.')
+					.addDropdown((dropdown) => {
+						for (const model of this.plugin.availableProviderModels) {
+							dropdown.addOption(model, model);
+						}
+						const selected = this.plugin.availableProviderModels.includes(this.plugin.settings.localProviderModel)
+							? this.plugin.settings.localProviderModel
+							: this.plugin.availableProviderModels[0];
+						dropdown.setValue(selected);
+						dropdown.onChange(async (value) => {
+							this.plugin.settings.localProviderModel = value;
+							await this.plugin.saveSettings();
+						});
+					});
+			}
 		} else if (this.plugin.settings.apiProvider === 'anythingllm') {
 			new Setting(containerEl)
 				.setName('AnythingLLM base URL')
@@ -867,6 +1038,35 @@ class Paper2SlidesSettingTab extends PluginSettingTab {
 						this.plugin.settings.localProviderApiKey = value.trim();
 						await this.plugin.saveSettings();
 					}));
+
+			new Setting(containerEl)
+				.setName('AnythingLLM check')
+				.setDesc('Test the endpoint and try to fetch a model list.')
+				.addButton((button) => button
+					.setButtonText('Test and load')
+					.onClick(async () => {
+						await this.plugin.refreshProviderModels(true);
+						this.display();
+					}));
+
+			if (this.plugin.availableProviderModels.length > 0) {
+				new Setting(containerEl)
+					.setName('AnythingLLM detected models')
+					.setDesc('Choose one of the models returned by the endpoint.')
+					.addDropdown((dropdown) => {
+						for (const model of this.plugin.availableProviderModels) {
+							dropdown.addOption(model, model);
+						}
+						const selected = this.plugin.availableProviderModels.includes(this.plugin.settings.localProviderModel)
+							? this.plugin.settings.localProviderModel
+							: this.plugin.availableProviderModels[0];
+						dropdown.setValue(selected);
+						dropdown.onChange(async (value) => {
+							this.plugin.settings.localProviderModel = value;
+							await this.plugin.saveSettings();
+						});
+					});
+			}
 		}
 
 		containerEl.createEl('h3', { text: 'Generation' });

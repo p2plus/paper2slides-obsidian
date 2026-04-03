@@ -14,6 +14,7 @@ This plugin does not generate slides on its own. It connects Obsidian to a local
 - Command palette actions for generate, re-import, setup check, and stop
 - Real generation options instead of hardcoded defaults
 - Provider overrides for Z.AI, LM Studio, Ollama, and AnythingLLM
+- Provider health checks and model loading for local endpoints
 - Run logs saved into the imported output folder
 
 ## Use it in a minute
@@ -77,6 +78,8 @@ If you do not want to rely on the upstream repo defaults, you can override the L
   uses a local OpenAI-compatible endpoint, defaulting to `http://localhost:11434/v1`
 - `AnythingLLM`
   lets you point Paper2Slides at your local AnythingLLM endpoint and model setup
+
+For `LM Studio`, `Ollama`, and `AnythingLLM`, the settings tab can now test the endpoint and try to load the available model list directly.
 
 ## Credit
 
