@@ -1,0 +1,10 @@
+{
+  "id": "paper2slides-obsidian",
+  "name": "Paper2Slides Obsidian",
+  "version": "1.0.0",
+  "minAppVersion": "0.15.0",
+  "description": "Run Paper2Slides from Obsidian and pull the latest slides, poster, and summary back into your vault.",
+  "author": "p2plus",
+  "authorUrl": "https://github.com/p2plus",
+  "isDesktopOnly": true
+}
