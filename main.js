@@ -22,11 +22,16 @@ var __copyProps = (to, from, except, desc) => {
   return to;
 };
 var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
+  // If the importer is in node compatibility mode or this is not an ESM
+  // file that has been converted to a CommonJS file using a Babel-
+  // compatible transform (i.e. "__esModule" has not been set), then set
+  // "default" to the CommonJS "module.exports" for node compatibility.
   isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
   mod
 ));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
+// main.ts
 var main_exports = {};
 __export(main_exports, {
   default: () => Paper2SlidesPlugin
@@ -42,11 +47,29 @@ var DEFAULT_SETTINGS = {
   outputType: "slides",
   style: "doraemon",
   customStyle: "",
-  fastMode: false
+  slidesLength: "short",
+  posterDensity: "medium",
+  fastMode: false,
+  parallelWorkers: 1,
+  importRoot: "Paper2Slides",
+  saveRunLog: true
 };
+var TIMESTAMP_DIR_PATTERN = /^\d{8}_\d{6}$/;
 var Paper2SlidesPlugin = class extends import_obsidian.Plugin {
+  constructor() {
+    super(...arguments);
+    this.activeRun = null;
+  }
   async onload() {
     await this.loadSettings();
+    this.addRibbonIcon("presentation", "Generate with Paper2Slides", async () => {
+      const file = this.app.workspace.getActiveFile();
+      if (!file || !this.isSupportedSource(file)) {
+        new import_obsidian.Notice("Open a PDF or Markdown note first.");
+        return;
+      }
+      await this.generateSlides(file);
+    });
     this.addSettingTab(new Paper2SlidesSettingTab(this.app, this));
     this.registerEvent(
       this.app.workspace.on("file-menu", (menu, file) => {
@@ -54,6 +77,11 @@ var Paper2SlidesPlugin = class extends import_obsidian.Plugin {
           menu.addItem((item) => {
             item.setTitle("Generate Slides/Poster (Paper2Slides)").setIcon("presentation").onClick(async () => {
               await this.generateSlides(file);
+            });
+          });
+          menu.addItem((item) => {
+            item.setTitle("Re-import latest Paper2Slides outputs").setIcon("sync").onClick(async () => {
+              await this.reimportLatestOutputs(file);
             });
           });
         }
@@ -67,6 +95,40 @@ var Paper2SlidesPlugin = class extends import_obsidian.Plugin {
         if (file && this.isSupportedSource(file)) {
           if (!checking) {
             void this.generateSlides(file);
+          }
+          return true;
+        }
+        return false;
+      }
+    });
+    this.addCommand({
+      id: "reimport-latest-outputs-current-file",
+      name: "Re-import latest Paper2Slides outputs for current file",
+      checkCallback: (checking) => {
+        const file = this.app.workspace.getActiveFile();
+        if (file && this.isSupportedSource(file)) {
+          if (!checking) {
+            void this.reimportLatestOutputs(file);
+          }
+          return true;
+        }
+        return false;
+      }
+    });
+    this.addCommand({
+      id: "check-paper2slides-setup",
+      name: "Check Paper2Slides setup",
+      callback: async () => {
+        await this.runSetupCheck(true);
+      }
+    });
+    this.addCommand({
+      id: "stop-paper2slides-run",
+      name: "Stop current Paper2Slides run",
+      checkCallback: (checking) => {
+        if (this.activeRun) {
+          if (!checking) {
+            void this.stopCurrentRun();
           }
           return true;
         }
@@ -87,10 +149,16 @@ var Paper2SlidesPlugin = class extends import_obsidian.Plugin {
     }
     return this.settings.style;
   }
-  getConfigDirName() {
-    const style = this.settings.style === "custom" ? `custom_${this.settings.customStyle.trim().slice(0, 16).replace(/ /g, "_").replace(/\//g, "_") || "custom"}` : this.settings.style;
-    const detail = this.settings.outputType === "poster" ? "medium" : "short";
-    return `${this.settings.outputType}_${style}_${detail}`;
+  getVaultImportRoot() {
+    return this.settings.importRoot.trim().replace(/^\/+|\/+$/g, "") || "Paper2Slides";
+  }
+  getTargetDir(sourceFile) {
+    return path.posix.join(this.getVaultImportRoot(), sourceFile.basename);
+  }
+  appendLogLine(run, line) {
+    if (line.trim().length > 0) {
+      run.logLines.push(line);
+    }
   }
   async ensureVaultFolder(folderPath) {
     if (folderPath === "." || folderPath === "" || await this.app.vault.adapter.exists(folderPath)) {
@@ -102,29 +170,74 @@ var Paper2SlidesPlugin = class extends import_obsidian.Plugin {
     }
     await this.app.vault.createFolder(folderPath);
   }
-  async generateSlides(file) {
+  async validateSetup(showNotice = false) {
+    const lines = [];
+    let ok = true;
     const repoPath = this.settings.p2sPath.trim();
     if (!repoPath) {
-      new import_obsidian.Notice("Set the Paper2Slides repo path in the plugin settings first.");
-      return;
+      ok = false;
+      lines.push("Missing repo path.");
+    } else if (!fs.existsSync(repoPath)) {
+      ok = false;
+      lines.push("Repo path does not exist.");
+    } else if (!fs.existsSync(path.join(repoPath, "paper2slides"))) {
+      ok = false;
+      lines.push("Repo path does not look like a Paper2Slides checkout.");
+    } else {
+      lines.push("Repo path looks valid.");
     }
-    if (!fs.existsSync(repoPath)) {
-      new import_obsidian.Notice("The configured Paper2Slides repo path does not exist.");
-      return;
+    const envPath = repoPath ? path.join(repoPath, "paper2slides", ".env") : "";
+    if (envPath && fs.existsSync(envPath)) {
+      lines.push("Found paper2slides/.env.");
+    } else {
+      ok = false;
+      lines.push("Missing paper2slides/.env.");
     }
-    if (!fs.existsSync(path.join(repoPath, "paper2slides"))) {
-      new import_obsidian.Notice("The repo path looks wrong. Expected a folder containing the paper2slides package.");
-      return;
+    if (repoPath) {
+      const pythonVersion = await this.runCommand(this.settings.pythonPath, ["--version"], repoPath);
+      if (pythonVersion.ok) {
+        lines.push(`Python command works: ${pythonVersion.output.trim()}`);
+      } else {
+        ok = false;
+        lines.push(`Python command failed: ${pythonVersion.output.trim() || this.settings.pythonPath}`);
+      }
+      const cliCheck = await this.runCommand(this.settings.pythonPath, ["-m", "paper2slides", "--help"], repoPath);
+      if (cliCheck.ok) {
+        lines.push("paper2slides CLI starts.");
+      } else {
+        ok = false;
+        lines.push("paper2slides CLI did not start.");
+      }
     }
-    const adapter = this.app.vault.adapter;
-    if (!(adapter instanceof import_obsidian.FileSystemAdapter)) {
-      new import_obsidian.Notice("Only local vaults are supported right now.");
-      return;
+    if (showNotice) {
+      const prefix = ok ? "Paper2Slides setup looks good." : "Paper2Slides setup still needs fixes.";
+      new import_obsidian.Notice([prefix, ...lines].join("\n"), 12e3);
     }
-    const fullInputPath = path.join(adapter.getBasePath(), file.path);
-    const contentType = this.getContentType(file);
-    const styleArg = this.getStyleArgument();
-    new import_obsidian.Notice(`Starting Paper2Slides for ${file.name}...`);
+    return { ok, lines };
+  }
+  async runCommand(command, args, cwd) {
+    return await new Promise((resolve) => {
+      const child = (0, import_child_process.spawn)(command, args, { cwd, env: { ...process.env } });
+      let output = "";
+      child.stdout.on("data", (data) => {
+        output += data.toString();
+      });
+      child.stderr.on("data", (data) => {
+        output += data.toString();
+      });
+      child.on("error", (error) => {
+        resolve({ ok: false, output: error.message });
+      });
+      child.on("close", (code) => {
+        resolve({ ok: code === 0, output });
+      });
+    });
+  }
+  async runSetupCheck(showNotice = true) {
+    const result = await this.validateSetup(showNotice);
+    return result.ok;
+  }
+  buildCliArgs(fullInputPath, contentType) {
     const args = [
       "-m",
       "paper2slides",
@@ -135,41 +248,109 @@ var Paper2SlidesPlugin = class extends import_obsidian.Plugin {
       "--output",
       this.settings.outputType,
       "--style",
-      styleArg
+      this.getStyleArgument()
     ];
+    if (this.settings.outputType === "slides") {
+      args.push("--length", this.settings.slidesLength);
+    } else {
+      args.push("--density", this.settings.posterDensity);
+    }
     if (this.settings.fastMode) {
       args.push("--fast");
     }
-    console.log(`Running: ${this.settings.pythonPath} ${args.join(" ")}`);
-    const p2sProcess = (0, import_child_process.spawn)(this.settings.pythonPath, args, {
+    if (this.settings.parallelWorkers > 1) {
+      args.push("--parallel", String(this.settings.parallelWorkers));
+    }
+    return args;
+  }
+  async generateSlides(file) {
+    if (this.activeRun) {
+      new import_obsidian.Notice(`A Paper2Slides run is already active for ${this.activeRun.file.name}. Stop it first or wait for it to finish.`);
+      return;
+    }
+    const setupOk = await this.runSetupCheck(false);
+    if (!setupOk) {
+      await this.runSetupCheck(true);
+      return;
+    }
+    const adapter = this.app.vault.adapter;
+    if (!(adapter instanceof import_obsidian.FileSystemAdapter)) {
+      new import_obsidian.Notice("Only local vaults are supported right now.");
+      return;
+    }
+    const repoPath = this.settings.p2sPath.trim();
+    const fullInputPath = path.join(adapter.getBasePath(), file.path);
+    const contentType = this.getContentType(file);
+    const args = this.buildCliArgs(fullInputPath, contentType);
+    const targetDir = this.getTargetDir(file);
+    new import_obsidian.Notice(`Starting Paper2Slides for ${file.name}...`, 6e3);
+    const processHandle = (0, import_child_process.spawn)(this.settings.pythonPath, args, {
       cwd: repoPath,
       env: { ...process.env }
     });
-    p2sProcess.on("error", (error) => {
-      console.error("Paper2Slides process error:", error);
+    const run = {
+      file,
+      contentType,
+      process: processHandle,
+      startedAt: Date.now(),
+      targetDir,
+      logLines: [
+        `Command: ${this.settings.pythonPath} ${args.join(" ")}`,
+        `Started: ${(/* @__PURE__ */ new Date()).toISOString()}`
+      ]
+    };
+    this.activeRun = run;
+    processHandle.on("error", async (error) => {
+      this.appendLogLine(run, `Process error: ${error.message}`);
+      await this.writeRunLog(run, false);
+      this.activeRun = null;
       new import_obsidian.Notice(`Could not start ${this.settings.pythonPath}. Check the Python command in settings.`);
     });
-    p2sProcess.stdout.on("data", (data) => {
+    processHandle.stdout.on("data", (data) => {
       const output = data.toString();
       console.log(`Paper2Slides stdout: ${output}`);
-      const lines = output.split("\n");
-      for (const line of lines) {
+      for (const line of output.split("\n")) {
+        this.appendLogLine(run, line);
         if (line.includes("Starting Stage:")) {
-          new import_obsidian.Notice(`Paper2Slides: ${line.trim()}`);
+          new import_obsidian.Notice(`Paper2Slides: ${line.trim()}`, 4e3);
         }
       }
     });
-    p2sProcess.stderr.on("data", (data) => {
-      console.error(`Paper2Slides stderr: ${data}`);
-    });
-    p2sProcess.on("close", async (code) => {
-      if (code === 0) {
-        new import_obsidian.Notice("Paper2Slides finished. Importing the newest result into the vault...");
-        await this.importLatestOutputs(file, contentType);
-      } else {
-        new import_obsidian.Notice(`Paper2Slides failed with exit code ${code}. Open the developer console for logs.`);
+    processHandle.stderr.on("data", (data) => {
+      const output = data.toString();
+      console.error(`Paper2Slides stderr: ${output}`);
+      for (const line of output.split("\n")) {
+        this.appendLogLine(run, `[stderr] ${line}`);
       }
     });
+    processHandle.on("close", async (code) => {
+      this.appendLogLine(run, `Exited with code: ${code}`);
+      const success = code === 0;
+      if (success) {
+        await this.importLatestOutputs(run.file, run.contentType, run.startedAt);
+        await this.writeRunLog(run, true);
+        new import_obsidian.Notice(`Paper2Slides finished for ${run.file.name}. Imported the latest outputs into ${targetDir}.`, 8e3);
+      } else {
+        await this.writeRunLog(run, false);
+        new import_obsidian.Notice(`Paper2Slides failed for ${run.file.name}. Check ${path.posix.join(targetDir, "last-run.log")}.`, 1e4);
+      }
+      this.activeRun = null;
+    });
+  }
+  async stopCurrentRun() {
+    if (!this.activeRun) {
+      new import_obsidian.Notice("No Paper2Slides run is active right now.");
+      return;
+    }
+    const run = this.activeRun;
+    this.appendLogLine(run, "Stopping run on user request.");
+    run.process.kill("SIGTERM");
+    setTimeout(() => {
+      if (this.activeRun === run) {
+        run.process.kill("SIGKILL");
+      }
+    }, 3e3);
+    new import_obsidian.Notice(`Stopping Paper2Slides for ${run.file.name}...`);
   }
   collectGeneratedFiles(dir) {
     if (!fs.existsSync(dir)) {
@@ -181,25 +362,53 @@ var Paper2SlidesPlugin = class extends import_obsidian.Plugin {
       const stat = fs.statSync(currentPath);
       if (stat.isDirectory()) {
         collected.push(...this.collectGeneratedFiles(currentPath));
-        continue;
-      }
-      if (name.endsWith(".pdf") || name.endsWith(".png") || name.endsWith(".md")) {
+      } else if (name.endsWith(".pdf") || name.endsWith(".png") || name.endsWith(".md")) {
         collected.push(currentPath);
       }
     }
     return collected;
   }
-  getLatestTimestampDir(configDir) {
+  findLatestRunDir(modeDir) {
     var _a;
-    if (!fs.existsSync(configDir)) {
+    if (!fs.existsSync(modeDir)) {
       return null;
     }
-    const candidates = fs.readdirSync(configDir).map((name) => path.join(configDir, name)).filter((candidate) => fs.statSync(candidate).isDirectory()).sort((a, b) => path.basename(b).localeCompare(path.basename(a)));
-    return (_a = candidates[0]) != null ? _a : null;
+    const matches = [];
+    const walk = (dir) => {
+      for (const name of fs.readdirSync(dir)) {
+        const currentPath = path.join(dir, name);
+        const stat = fs.statSync(currentPath);
+        if (!stat.isDirectory()) {
+          continue;
+        }
+        if (TIMESTAMP_DIR_PATTERN.test(name)) {
+          matches.push(currentPath);
+        }
+        walk(currentPath);
+      }
+    };
+    walk(modeDir);
+    matches.sort((a, b) => {
+      const nameCompare = path.basename(b).localeCompare(path.basename(a));
+      if (nameCompare !== 0) {
+        return nameCompare;
+      }
+      return fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs;
+    });
+    return (_a = matches[0]) != null ? _a : null;
+  }
+  getModeDir(sourceFile, contentType, fastMode = this.settings.fastMode) {
+    return path.join(
+      this.settings.p2sPath.trim(),
+      "outputs",
+      sourceFile.basename,
+      contentType,
+      fastMode ? "fast" : "normal"
+    );
   }
   async writeVaultFile(vaultPath, sourcePath) {
     const data = fs.readFileSync(sourcePath);
-    if (sourcePath.endsWith(".md")) {
+    if (sourcePath.endsWith(".md") || sourcePath.endsWith(".log")) {
       const content = data.toString("utf8");
       if (await this.app.vault.adapter.exists(vaultPath)) {
         await this.app.vault.adapter.write(vaultPath, content);
@@ -215,26 +424,55 @@ var Paper2SlidesPlugin = class extends import_obsidian.Plugin {
       await this.app.vault.createBinary(vaultPath, binary);
     }
   }
-  async importLatestOutputs(sourceFile, contentType) {
-    const projectDir = path.join(this.settings.p2sPath, "outputs", sourceFile.basename, contentType);
-    const modeDir = path.join(projectDir, this.settings.fastMode ? "fast" : "normal");
-    const configDir = path.join(modeDir, this.getConfigDirName());
-    const latestRunDir = this.getLatestTimestampDir(configDir);
-    const summaryPath = path.join(modeDir, "summary.md");
-    const sourcePaths = /* @__PURE__ */ new Set();
-    if (fs.existsSync(summaryPath)) {
-      sourcePaths.add(summaryPath);
+  async writeRunLog(run, success) {
+    if (!this.settings.saveRunLog) {
+      return;
     }
+    await this.ensureVaultFolder(run.targetDir);
+    const body = [
+      ...run.logLines,
+      `Finished: ${(/* @__PURE__ */ new Date()).toISOString()}`,
+      `Status: ${success ? "success" : "failed"}`
+    ].join("\n");
+    await this.writeVaultFile(path.posix.join(run.targetDir, "last-run.log"), this.createTempTextFile(body));
+  }
+  createTempTextFile(content) {
+    const tempPath = path.join(this.app.vault.configDir, "plugins", "paper2slides-obsidian", "tmp-last-run.log");
+    fs.mkdirSync(path.dirname(tempPath), { recursive: true });
+    fs.writeFileSync(tempPath, content, "utf8");
+    return tempPath;
+  }
+  async importLatestOutputs(sourceFile, contentType, runStartedAt) {
+    const preferredModeDir = this.getModeDir(sourceFile, contentType, this.settings.fastMode);
+    const fallbackModeDir = this.getModeDir(sourceFile, contentType, !this.settings.fastMode);
+    let modeDir = preferredModeDir;
+    let latestRunDir = this.findLatestRunDir(preferredModeDir);
+    if (!latestRunDir) {
+      modeDir = fallbackModeDir;
+      latestRunDir = this.findLatestRunDir(fallbackModeDir);
+    }
+    const summaryPath = path.join(modeDir, "summary.md");
+    const targetDir = this.getTargetDir(sourceFile);
+    const sourcePaths = /* @__PURE__ */ new Set();
     if (latestRunDir) {
+      for (const filePath of this.collectGeneratedFiles(latestRunDir)) {
+        if (!runStartedAt || fs.statSync(filePath).mtimeMs >= runStartedAt - 2e3) {
+          sourcePaths.add(filePath);
+        }
+      }
+    }
+    if (sourcePaths.size === 0 && latestRunDir) {
       for (const filePath of this.collectGeneratedFiles(latestRunDir)) {
         sourcePaths.add(filePath);
       }
+    }
+    if (fs.existsSync(summaryPath)) {
+      sourcePaths.add(summaryPath);
     }
     if (sourcePaths.size === 0) {
       new import_obsidian.Notice("Paper2Slides finished, but no output files were found to import.");
       return;
     }
-    const targetDir = path.posix.join("Paper2Slides", sourceFile.basename);
     await this.ensureVaultFolder(targetDir);
     let importedCount = 0;
     for (const sourcePath of sourcePaths) {
@@ -243,7 +481,15 @@ var Paper2SlidesPlugin = class extends import_obsidian.Plugin {
       await this.writeVaultFile(vaultPath, sourcePath);
       importedCount += 1;
     }
-    new import_obsidian.Notice(`Imported ${importedCount} files into ${targetDir}`);
+    new import_obsidian.Notice(`Imported ${importedCount} files into ${targetDir}`, 7e3);
+  }
+  async reimportLatestOutputs(file) {
+    const setupOk = await this.runSetupCheck(false);
+    if (!setupOk) {
+      await this.runSetupCheck(true);
+      return;
+    }
+    await this.importLatestOutputs(file, this.getContentType(file));
   }
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
@@ -261,36 +507,68 @@ var Paper2SlidesSettingTab = class extends import_obsidian.PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h2", { text: "Paper2Slides settings" });
-    new import_obsidian.Setting(containerEl).setName("Python command").setDesc("Usually python3. Point this to your venv only if you really need to.").addText((text) => text.setPlaceholder("python3").setValue(this.plugin.settings.pythonPath).onChange(async (value) => {
+    containerEl.createEl("p", {
+      text: "You can trigger the plugin from the settings tab, the left ribbon, the command palette, or the file right-click menu."
+    });
+    new import_obsidian.Setting(containerEl).setName("Run setup check").setDesc("Verify Python, repo path, CLI startup, and paper2slides/.env.").addButton((button) => button.setButtonText("Check now").onClick(async () => {
+      await this.plugin.runSetupCheck(true);
+    }));
+    new import_obsidian.Setting(containerEl).setName("Python command").setDesc("Usually python3. Point this to your venv only if you actually need to.").addText((text) => text.setPlaceholder("python3").setValue(this.plugin.settings.pythonPath).onChange(async (value) => {
       this.plugin.settings.pythonPath = value.trim() || "python3";
       await this.plugin.saveSettings();
     }));
-    new import_obsidian.Setting(containerEl).setName("Paper2Slides repo path").setDesc("Absolute path to your cloned Paper2Slides checkout.").addText((text) => text.setPlaceholder("/path/to/Paper2Slides").setValue(this.plugin.settings.p2sPath).onChange(async (value) => {
+    new import_obsidian.Setting(containerEl).setName("Paper2Slides repo path").setDesc("Absolute path to your local Paper2Slides checkout.").addText((text) => text.setPlaceholder("/path/to/Paper2Slides").setValue(this.plugin.settings.p2sPath).onChange(async (value) => {
       this.plugin.settings.p2sPath = value.trim();
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian.Setting(containerEl).setName("Import folder in the vault").setDesc("Imported files land here, grouped by source file name.").addText((text) => text.setPlaceholder("Paper2Slides").setValue(this.plugin.settings.importRoot).onChange(async (value) => {
+      this.plugin.settings.importRoot = value.trim() || "Paper2Slides";
       await this.plugin.saveSettings();
     }));
     containerEl.createEl("h3", { text: "Generation" });
     new import_obsidian.Setting(containerEl).setName("Output type").setDesc("Generate either slides or a poster.").addDropdown((dropdown) => dropdown.addOption("slides", "Slides").addOption("poster", "Poster").setValue(this.plugin.settings.outputType).onChange(async (value) => {
       this.plugin.settings.outputType = value;
       await this.plugin.saveSettings();
+      this.display();
     }));
-    new import_obsidian.Setting(containerEl).setName("Style preset").setDesc("Use one of the built-in styles, or switch to custom and type your own prompt below.").addDropdown((dropdown) => dropdown.addOption("academic", "Academic").addOption("doraemon", "Doraemon").addOption("custom", "Custom").setValue(this.plugin.settings.style).onChange(async (value) => {
+    if (this.plugin.settings.outputType === "slides") {
+      new import_obsidian.Setting(containerEl).setName("Slides length").setDesc("Passed through to Paper2Slides as --length.").addDropdown((dropdown) => dropdown.addOption("short", "Short").addOption("medium", "Medium").addOption("long", "Long").setValue(this.plugin.settings.slidesLength).onChange(async (value) => {
+        this.plugin.settings.slidesLength = value;
+        await this.plugin.saveSettings();
+      }));
+    } else {
+      new import_obsidian.Setting(containerEl).setName("Poster density").setDesc("Passed through to Paper2Slides as --density.").addDropdown((dropdown) => dropdown.addOption("sparse", "Sparse").addOption("medium", "Medium").addOption("dense", "Dense").setValue(this.plugin.settings.posterDensity).onChange(async (value) => {
+        this.plugin.settings.posterDensity = value;
+        await this.plugin.saveSettings();
+      }));
+    }
+    new import_obsidian.Setting(containerEl).setName("Style preset").setDesc("Use a built-in style or switch to custom and type your own prompt below.").addDropdown((dropdown) => dropdown.addOption("academic", "Academic").addOption("doraemon", "Doraemon").addOption("custom", "Custom").setValue(this.plugin.settings.style).onChange(async (value) => {
       this.plugin.settings.style = value;
       await this.plugin.saveSettings();
       this.display();
     }));
     if (this.plugin.settings.style === "custom") {
-      new import_obsidian.Setting(containerEl).setName("Custom style prompt").setDesc("Passed straight through to Paper2Slides as the style argument.").addTextArea((text) => text.setPlaceholder("Clean editorial slides with warm neutrals and subtle diagrams.").setValue(this.plugin.settings.customStyle).onChange(async (value) => {
+      new import_obsidian.Setting(containerEl).setName("Custom style prompt").setDesc("Passed straight through as the style argument.").addTextArea((text) => text.setPlaceholder("Clean editorial slides with warm neutrals and subtle diagrams.").setValue(this.plugin.settings.customStyle).onChange(async (value) => {
         this.plugin.settings.customStyle = value;
         await this.plugin.saveSettings();
       }));
     }
-    new import_obsidian.Setting(containerEl).setName("Fast mode").setDesc("Skip RAG indexing. Good for quick passes and smaller inputs.").addToggle((toggle) => toggle.setValue(this.plugin.settings.fastMode).onChange(async (value) => {
+    new import_obsidian.Setting(containerEl).setName("Fast mode").setDesc("Skip RAG indexing. Better for quick passes and smaller inputs.").addToggle((toggle) => toggle.setValue(this.plugin.settings.fastMode).onChange(async (value) => {
       this.plugin.settings.fastMode = value;
       await this.plugin.saveSettings();
     }));
+    new import_obsidian.Setting(containerEl).setName("Parallel workers").setDesc("Only used when set above 1.").addText((text) => text.setPlaceholder("1").setValue(String(this.plugin.settings.parallelWorkers)).onChange(async (value) => {
+      const parsed = Number.parseInt(value, 10);
+      this.plugin.settings.parallelWorkers = Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+      await this.plugin.saveSettings();
+    }));
+    new import_obsidian.Setting(containerEl).setName("Save run log").setDesc("Write last-run.log into the imported output folder.").addToggle((toggle) => toggle.setValue(this.plugin.settings.saveRunLog).onChange(async (value) => {
+      this.plugin.settings.saveRunLog = value;
+      await this.plugin.saveSettings();
+    }));
+    containerEl.createEl("h3", { text: "Where to use it" });
     containerEl.createEl("p", {
-      text: "PDF files run as paper mode. Markdown notes run as general mode automatically."
+      text: "Use the ribbon button, command palette, or the right-click menu on a PDF or Markdown file. The plugin also exposes a re-import command and a stop command for long runs."
     });
   }
 };
