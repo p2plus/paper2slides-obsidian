@@ -88,6 +88,7 @@ const TIMESTAMP_DIR_PATTERN = /^\d{8}_\d{6}$/;
 const Z_AI_CODING_PLAN_URL = 'https://api.z.ai/api/coding/paas/v4/';
 const LM_STUDIO_BASE_URL = 'http://127.0.0.1:1234/v1';
 const OLLAMA_BASE_URL = 'http://localhost:11434/v1';
+const PROVIDER_REQUEST_TIMEOUT_MS = 10000;
 
 export default class Paper2SlidesPlugin extends Plugin {
 	settings: Paper2SlidesSettings;
@@ -202,7 +203,7 @@ export default class Paper2SlidesPlugin extends Plugin {
 		});
 	}
 
-	private isSupportedSource(file: TFile): boolean {
+	isSupportedSource(file: TFile): boolean {
 		return file.extension === 'pdf' || file.extension === 'md';
 	}
 
@@ -242,7 +243,7 @@ export default class Paper2SlidesPlugin extends Plugin {
 		}
 
 		if (this.settings.apiProvider === 'lm_studio' || this.settings.apiProvider === 'ollama' || this.settings.apiProvider === 'anythingllm') {
-			return this.settings.localProviderModel.trim();
+			return this.settings.localProviderModel.trim() || this.getDefaultModelForProvider(this.settings.apiProvider);
 		}
 
 		return '';
@@ -285,6 +286,13 @@ export default class Paper2SlidesPlugin extends Plugin {
 		}
 
 		this.settings.localProviderModel = trimmed || this.getDefaultModelForProvider(provider);
+	}
+
+	clearProviderStatus(clearModels = true): void {
+		this.providerStatus = null;
+		if (clearModels) {
+			this.availableProviderModels = [];
+		}
 	}
 
 	private getResolvedBaseUrl(): string {
@@ -333,16 +341,23 @@ export default class Paper2SlidesPlugin extends Plugin {
 
 	private getProviderModelsUrl(): string {
 		if (this.settings.apiProvider === 'ollama') {
-			return `${this.getResolvedBaseUrl().replace(/\/$/, '')}/api/tags`;
+			const nativeBaseUrl = this.getResolvedBaseUrl().replace(/\/+$/, '').replace(/\/v1$/, '');
+			return `${nativeBaseUrl}/api/tags`;
 		}
-		return `${this.getResolvedBaseUrl().replace(/\/$/, '')}/models`;
+		return `${this.getResolvedBaseUrl().replace(/\/+$/, '')}/models`;
 	}
 
 	private async fetchJson(url: string, headers: Record<string, string>): Promise<FetchJsonResult> {
+		const controller = new AbortController();
+		const timeout = window.setTimeout(() => controller.abort(), PROVIDER_REQUEST_TIMEOUT_MS);
 		try {
 			const response = await fetch(url, {
 				method: 'GET',
-				headers,
+				headers: {
+					Accept: 'application/json',
+					...headers,
+				},
+				signal: controller.signal,
 			});
 			let body: any = null;
 			try {
@@ -352,12 +367,19 @@ export default class Paper2SlidesPlugin extends Plugin {
 			}
 			return { ok: response.ok, status: response.status, body };
 		} catch (error) {
+			const message = error instanceof Error && error.name === 'AbortError'
+				? `Request timed out after ${PROVIDER_REQUEST_TIMEOUT_MS / 1000}s.`
+				: error instanceof Error
+					? error.message
+					: 'Unknown request error.';
 			return {
 				ok: false,
 				status: 0,
 				body: null,
-				error: error instanceof Error ? error.message : 'Unknown request error.',
+				error: message,
 			};
+		} finally {
+			window.clearTimeout(timeout);
 		}
 	}
 
@@ -410,6 +432,7 @@ export default class Paper2SlidesPlugin extends Plugin {
 	async testSelectedProvider(showNotice = true): Promise<ProviderTestResult> {
 		if (this.settings.apiProvider === 'repo_defaults') {
 			const result = { ok: true, lines: ['Repo defaults selected. No provider endpoint test to run.'] };
+			this.providerStatus = result;
 			if (showNotice) {
 				new Notice(result.lines.join('\n'), 8000);
 			}
@@ -419,6 +442,7 @@ export default class Paper2SlidesPlugin extends Plugin {
 		const baseUrl = this.getResolvedBaseUrl();
 		if (!baseUrl) {
 			const result = { ok: false, lines: ['Missing provider base URL.'] };
+			this.providerStatus = result;
 			if (showNotice) {
 				new Notice(result.lines.join('\n'), 8000);
 			}
@@ -898,6 +922,40 @@ class Paper2SlidesSettingTab extends PluginSettingTab {
 			text: 'You can trigger the plugin from the settings tab, the left ribbon, the command palette, or the file right-click menu.',
 		});
 
+		const activeFile = this.app.workspace.getActiveFile();
+		const activeFileDesc = activeFile && this.plugin.isSupportedSource(activeFile)
+			? `Current file: ${activeFile.path}`
+			: 'Open a PDF or Markdown note to run Paper2Slides from here.';
+
+		new Setting(containerEl)
+			.setName('Current file')
+			.setDesc(activeFileDesc)
+			.addButton((button) => button
+				.setButtonText('Generate')
+				.setDisabled(!activeFile || !this.plugin.isSupportedSource(activeFile) || !!this.plugin.activeRun)
+				.onClick(async () => {
+					if (activeFile && this.plugin.isSupportedSource(activeFile)) {
+						await this.plugin.generateSlides(activeFile);
+						this.display();
+					}
+				}))
+			.addButton((button) => button
+				.setButtonText('Re-import')
+				.setDisabled(!activeFile || !this.plugin.isSupportedSource(activeFile) || !!this.plugin.activeRun)
+				.onClick(async () => {
+					if (activeFile && this.plugin.isSupportedSource(activeFile)) {
+						await this.plugin.reimportLatestOutputs(activeFile);
+						this.display();
+					}
+				}))
+			.addButton((button) => button
+				.setButtonText(this.plugin.activeRun ? 'Stop run' : 'No run')
+				.setDisabled(!this.plugin.activeRun)
+				.onClick(async () => {
+					await this.plugin.stopCurrentRun();
+					this.display();
+				}));
+
 		new Setting(containerEl)
 			.setName('Run setup check')
 			.setDesc('Verify Python, repo path, CLI startup, and paper2slides/.env.')
@@ -989,13 +1047,15 @@ class Paper2SlidesSettingTab extends PluginSettingTab {
 			new Setting(containerEl)
 				.setName('Z AI entrypoint')
 				.setDesc('Currently wired to the International Coding Plan endpoint.')
-				.addDropdown((dropdown) => dropdown
-					.addOption('international_coding_plan', 'International Coding Plan')
-					.setValue(this.plugin.settings.zAiEntrypoint)
-					.onChange(async (value: ZAiEntrypoint) => {
-						this.plugin.settings.zAiEntrypoint = value;
-						await this.plugin.saveSettings();
-					}));
+					.addDropdown((dropdown) => dropdown
+						.addOption('international_coding_plan', 'International Coding Plan')
+						.setValue(this.plugin.settings.zAiEntrypoint)
+						.onChange(async (value: ZAiEntrypoint) => {
+							this.plugin.settings.zAiEntrypoint = value;
+							this.plugin.clearProviderStatus();
+							await this.plugin.saveSettings();
+							this.display();
+						}));
 
 			new Setting(containerEl)
 				.setName('Z AI API key')
@@ -1005,6 +1065,7 @@ class Paper2SlidesSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.zAiApiKey)
 					.onChange(async (value) => {
 						this.plugin.settings.zAiApiKey = value.trim();
+						this.plugin.clearProviderStatus();
 						await this.plugin.saveSettings();
 					}));
 
@@ -1059,6 +1120,7 @@ class Paper2SlidesSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.localProviderBaseUrl)
 					.onChange(async (value) => {
 						this.plugin.settings.localProviderBaseUrl = value.trim() || defaultBaseUrl;
+						this.plugin.clearProviderStatus();
 						await this.plugin.saveSettings();
 					}));
 
@@ -1081,6 +1143,7 @@ class Paper2SlidesSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.localProviderApiKey)
 					.onChange(async (value) => {
 						this.plugin.settings.localProviderApiKey = value.trim();
+						this.plugin.clearProviderStatus();
 						await this.plugin.saveSettings();
 					}));
 
@@ -1121,6 +1184,7 @@ class Paper2SlidesSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.anythingllmBaseUrl)
 					.onChange(async (value) => {
 						this.plugin.settings.anythingllmBaseUrl = value.trim();
+						this.plugin.clearProviderStatus();
 						await this.plugin.saveSettings();
 					}));
 
@@ -1143,6 +1207,7 @@ class Paper2SlidesSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.localProviderApiKey)
 					.onChange(async (value) => {
 						this.plugin.settings.localProviderApiKey = value.trim();
+						this.plugin.clearProviderStatus();
 						await this.plugin.saveSettings();
 					}));
 

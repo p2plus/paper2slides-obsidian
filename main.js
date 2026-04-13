@@ -67,6 +67,7 @@ var TIMESTAMP_DIR_PATTERN = /^\d{8}_\d{6}$/;
 var Z_AI_CODING_PLAN_URL = "https://api.z.ai/api/coding/paas/v4/";
 var LM_STUDIO_BASE_URL = "http://127.0.0.1:1234/v1";
 var OLLAMA_BASE_URL = "http://localhost:11434/v1";
+var PROVIDER_REQUEST_TIMEOUT_MS = 1e4;
 var Paper2SlidesPlugin = class extends import_obsidian.Plugin {
   constructor() {
     super(...arguments);
@@ -196,7 +197,7 @@ var Paper2SlidesPlugin = class extends import_obsidian.Plugin {
       return this.settings.zAiModelPreset;
     }
     if (this.settings.apiProvider === "lm_studio" || this.settings.apiProvider === "ollama" || this.settings.apiProvider === "anythingllm") {
-      return this.settings.localProviderModel.trim();
+      return this.settings.localProviderModel.trim() || this.getDefaultModelForProvider(this.settings.apiProvider);
     }
     return "";
   }
@@ -233,6 +234,12 @@ var Paper2SlidesPlugin = class extends import_obsidian.Plugin {
       return;
     }
     this.settings.localProviderModel = trimmed || this.getDefaultModelForProvider(provider);
+  }
+  clearProviderStatus(clearModels = true) {
+    this.providerStatus = null;
+    if (clearModels) {
+      this.availableProviderModels = [];
+    }
   }
   getResolvedBaseUrl() {
     switch (this.settings.apiProvider) {
@@ -273,15 +280,22 @@ var Paper2SlidesPlugin = class extends import_obsidian.Plugin {
   }
   getProviderModelsUrl() {
     if (this.settings.apiProvider === "ollama") {
-      return `${this.getResolvedBaseUrl().replace(/\/$/, "")}/api/tags`;
+      const nativeBaseUrl = this.getResolvedBaseUrl().replace(/\/+$/, "").replace(/\/v1$/, "");
+      return `${nativeBaseUrl}/api/tags`;
     }
-    return `${this.getResolvedBaseUrl().replace(/\/$/, "")}/models`;
+    return `${this.getResolvedBaseUrl().replace(/\/+$/, "")}/models`;
   }
   async fetchJson(url, headers) {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), PROVIDER_REQUEST_TIMEOUT_MS);
     try {
       const response = await fetch(url, {
         method: "GET",
-        headers
+        headers: {
+          Accept: "application/json",
+          ...headers
+        },
+        signal: controller.signal
       });
       let body = null;
       try {
@@ -291,12 +305,15 @@ var Paper2SlidesPlugin = class extends import_obsidian.Plugin {
       }
       return { ok: response.ok, status: response.status, body };
     } catch (error) {
+      const message = error instanceof Error && error.name === "AbortError" ? `Request timed out after ${PROVIDER_REQUEST_TIMEOUT_MS / 1e3}s.` : error instanceof Error ? error.message : "Unknown request error.";
       return {
         ok: false,
         status: 0,
         body: null,
-        error: error instanceof Error ? error.message : "Unknown request error."
+        error: message
       };
+    } finally {
+      window.clearTimeout(timeout);
     }
   }
   extractModelIds(body) {
@@ -339,6 +356,7 @@ var Paper2SlidesPlugin = class extends import_obsidian.Plugin {
     var _a;
     if (this.settings.apiProvider === "repo_defaults") {
       const result2 = { ok: true, lines: ["Repo defaults selected. No provider endpoint test to run."] };
+      this.providerStatus = result2;
       if (showNotice) {
         new import_obsidian.Notice(result2.lines.join("\n"), 8e3);
       }
@@ -347,6 +365,7 @@ var Paper2SlidesPlugin = class extends import_obsidian.Plugin {
     const baseUrl = this.getResolvedBaseUrl();
     if (!baseUrl) {
       const result2 = { ok: false, lines: ["Missing provider base URL."] };
+      this.providerStatus = result2;
       if (showNotice) {
         new import_obsidian.Notice(result2.lines.join("\n"), 8e3);
       }
@@ -761,6 +780,22 @@ var Paper2SlidesSettingTab = class extends import_obsidian.PluginSettingTab {
     containerEl.createEl("p", {
       text: "You can trigger the plugin from the settings tab, the left ribbon, the command palette, or the file right-click menu."
     });
+    const activeFile = this.app.workspace.getActiveFile();
+    const activeFileDesc = activeFile && this.plugin.isSupportedSource(activeFile) ? `Current file: ${activeFile.path}` : "Open a PDF or Markdown note to run Paper2Slides from here.";
+    new import_obsidian.Setting(containerEl).setName("Current file").setDesc(activeFileDesc).addButton((button) => button.setButtonText("Generate").setDisabled(!activeFile || !this.plugin.isSupportedSource(activeFile) || !!this.plugin.activeRun).onClick(async () => {
+      if (activeFile && this.plugin.isSupportedSource(activeFile)) {
+        await this.plugin.generateSlides(activeFile);
+        this.display();
+      }
+    })).addButton((button) => button.setButtonText("Re-import").setDisabled(!activeFile || !this.plugin.isSupportedSource(activeFile) || !!this.plugin.activeRun).onClick(async () => {
+      if (activeFile && this.plugin.isSupportedSource(activeFile)) {
+        await this.plugin.reimportLatestOutputs(activeFile);
+        this.display();
+      }
+    })).addButton((button) => button.setButtonText(this.plugin.activeRun ? "Stop run" : "No run").setDisabled(!this.plugin.activeRun).onClick(async () => {
+      await this.plugin.stopCurrentRun();
+      this.display();
+    }));
     new import_obsidian.Setting(containerEl).setName("Run setup check").setDesc("Verify Python, repo path, CLI startup, and paper2slides/.env.").addButton((button) => button.setButtonText("Check now").onClick(async () => {
       await this.plugin.runSetupCheck(true);
     }));
@@ -805,10 +840,13 @@ var Paper2SlidesSettingTab = class extends import_obsidian.PluginSettingTab {
     if (this.plugin.settings.apiProvider === "z_ai") {
       new import_obsidian.Setting(containerEl).setName("Z AI entrypoint").setDesc("Currently wired to the International Coding Plan endpoint.").addDropdown((dropdown) => dropdown.addOption("international_coding_plan", "International Coding Plan").setValue(this.plugin.settings.zAiEntrypoint).onChange(async (value) => {
         this.plugin.settings.zAiEntrypoint = value;
+        this.plugin.clearProviderStatus();
         await this.plugin.saveSettings();
+        this.display();
       }));
       new import_obsidian.Setting(containerEl).setName("Z AI API key").setDesc("Stored in the plugin settings and injected at runtime as RAG_LLM_API_KEY.").addText((text) => text.setPlaceholder("zai-...").setValue(this.plugin.settings.zAiApiKey).onChange(async (value) => {
         this.plugin.settings.zAiApiKey = value.trim();
+        this.plugin.clearProviderStatus();
         await this.plugin.saveSettings();
       }));
       new import_obsidian.Setting(containerEl).setName("Model").setDesc("Refresh the live model list, or type a model id directly.").addText((text) => text.setPlaceholder(this.plugin.getDefaultModelForProvider("z_ai")).setValue(this.plugin.getEditableModelValue("z_ai")).onChange(async (value) => {
@@ -837,6 +875,7 @@ var Paper2SlidesSettingTab = class extends import_obsidian.PluginSettingTab {
       const defaultBaseUrl = this.plugin.settings.apiProvider === "lm_studio" ? LM_STUDIO_BASE_URL : OLLAMA_BASE_URL;
       new import_obsidian.Setting(containerEl).setName(`${providerName} base URL`).setDesc("OpenAI-compatible endpoint used for the Paper2Slides run.").addText((text) => text.setPlaceholder(defaultBaseUrl).setValue(this.plugin.settings.localProviderBaseUrl).onChange(async (value) => {
         this.plugin.settings.localProviderBaseUrl = value.trim() || defaultBaseUrl;
+        this.plugin.clearProviderStatus();
         await this.plugin.saveSettings();
       }));
       new import_obsidian.Setting(containerEl).setName(`${providerName} model`).setDesc("Model id exposed by your local server.").addText((text) => text.setPlaceholder(this.plugin.getDefaultModelForProvider(this.plugin.settings.apiProvider)).setValue(this.plugin.getEditableModelValue()).onChange(async (value) => {
@@ -845,6 +884,7 @@ var Paper2SlidesSettingTab = class extends import_obsidian.PluginSettingTab {
       }));
       new import_obsidian.Setting(containerEl).setName(`${providerName} API key`).setDesc("Optional. If blank, the plugin injects a harmless local placeholder token.").addText((text) => text.setPlaceholder("optional").setValue(this.plugin.settings.localProviderApiKey).onChange(async (value) => {
         this.plugin.settings.localProviderApiKey = value.trim();
+        this.plugin.clearProviderStatus();
         await this.plugin.saveSettings();
       }));
       new import_obsidian.Setting(containerEl).setName(`${providerName} model list`).setDesc(`Fetch the current model list from ${this.plugin.settings.apiProvider === "ollama" ? "/api/tags" : "/models"}.`).addButton((button) => button.setButtonText("Refresh models").onClick(async () => {
@@ -867,6 +907,7 @@ var Paper2SlidesSettingTab = class extends import_obsidian.PluginSettingTab {
     } else if (this.plugin.settings.apiProvider === "anythingllm") {
       new import_obsidian.Setting(containerEl).setName("AnythingLLM base URL").setDesc("Use the OpenAI-compatible endpoint exposed by your local AnythingLLM setup.").addText((text) => text.setPlaceholder("http://localhost:3001/api/v1").setValue(this.plugin.settings.anythingllmBaseUrl).onChange(async (value) => {
         this.plugin.settings.anythingllmBaseUrl = value.trim();
+        this.plugin.clearProviderStatus();
         await this.plugin.saveSettings();
       }));
       new import_obsidian.Setting(containerEl).setName("AnythingLLM model").setDesc("Model id served through your local AnythingLLM endpoint.").addText((text) => text.setPlaceholder(this.plugin.getDefaultModelForProvider("anythingllm")).setValue(this.plugin.getEditableModelValue("anythingllm")).onChange(async (value) => {
@@ -875,6 +916,7 @@ var Paper2SlidesSettingTab = class extends import_obsidian.PluginSettingTab {
       }));
       new import_obsidian.Setting(containerEl).setName("AnythingLLM API key").setDesc("Optional here, but fill it in if your AnythingLLM API access requires one.").addText((text) => text.setPlaceholder("optional").setValue(this.plugin.settings.localProviderApiKey).onChange(async (value) => {
         this.plugin.settings.localProviderApiKey = value.trim();
+        this.plugin.clearProviderStatus();
         await this.plugin.saveSettings();
       }));
       new import_obsidian.Setting(containerEl).setName("AnythingLLM check").setDesc("Test the endpoint and fetch the live model list from /models.").addButton((button) => button.setButtonText("Refresh models").onClick(async () => {
